@@ -1,0 +1,63 @@
+name: Hami Scraper
+
+on:
+  workflow_dispatch:
+    inputs:
+      packing_date:
+        description: 'Packing date to scrape (format: MM/DD/YYYY)'
+        required: false
+        default: ''
+      urls:
+        description: 'Comma-separated product URLs to scrape'
+        required: false
+        default: 'https://www.hamifleurs.nl/hami/en/EUR/All-products/c/root'
+
+jobs:
+  run-scraper:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 2️⃣ Setup Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      # 3️⃣ Install dependencies
+      - name: Install dependencies
+        run: npm install  # keep puppeteer-core if you want
+
+      # 4️⃣ Install Google Chrome for Puppeteer Core
+      - name: Install Google Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg2
+          wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+
+      # 5️⃣ Run scraper script
+      - name: Run scraper script
+        env:
+          HAMI_USERNAME: ${{ secrets.HAMI_USERNAME }}
+          HAMI_PASSWORD: ${{ secrets.HAMI_PASSWORD }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          SHEET_NAME: ${{ secrets.SHEET_NAME }}
+          CREDENTIALS_PATH: ${{ secrets.CREDENTIALS_PATH }}
+          LOGIN_URL: ${{ secrets.LOGIN_URL }}
+          URLS: ${{ github.event.inputs.urls }}
+          LOG_PATH: 'scraper.log'
+          PACKING_DATE: ${{ github.event.inputs.packing_date }}
+          PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome
+        run: node hamifleurs-scraper.js
+
+      # 6️⃣ Trigger Apps Script WebApp
+      - name: Trigger Apps Script WebApp
+        run: |
+          curl -X POST "https://script.google.com/macros/s/AKfycbwbaiFoCVB480SOwXPBr_TrWQnjJEBcA9so8KoiBlnjwnFq7EWLKNXb2No8SpuSVHgd/exec" \
+            -d "key=H4m1Scrap3rT1g"
