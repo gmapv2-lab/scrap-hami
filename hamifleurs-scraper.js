@@ -1127,6 +1127,7 @@ function scrapeAttributes(card) {
     NoOfBuds: "N/A",
   };
 
+  // Do not depend on one exact <ul> nesting.
   const items = Array.from(
     card.querySelectorAll("li[data-sequence]")
   );
@@ -1143,26 +1144,21 @@ function scrapeAttributes(card) {
     const sequence =
       item.getAttribute("data-sequence");
 
-    // ==========================================
-    // NO OF BUDS
-    // 5+
-    // 7+
-    // ==========================================
+    const svgPath =
+      item.querySelector("svg path")
+        ?.getAttribute("d") || "";
 
+    const hasSvg =
+      Boolean(item.querySelector("svg"));
+
+    // NO OF BUDS: 5+, 7+, 10+
     if (/^\d+\s*\+$/.test(text)) {
       attrs.NoOfBuds =
         text.replace(/\s+/g, "");
-
       continue;
     }
 
-    // ==========================================
-    // WEIGHT
-    // 55 gr
-    // 75 gr
-    // 1 kg
-    // ==========================================
-
+    // WEIGHT: 55 gr, 75 gr, 1 kg
     if (
       /\b(gr|gram|grams|kg)\b/i.test(text)
     ) {
@@ -1170,20 +1166,12 @@ function scrapeAttributes(card) {
       continue;
     }
 
-    // ==========================================
-    // DIAMETER
-    //
-    // IMPORTANT:
-    // If text contains Minimaal / Minimum / Min.
-    // it is Diameter regardless of sequence.
-    //
+    // DIAMETER BY TEXT:
     // Minimaal 9 cm -> 9 cm
-    // ==========================================
-
+    // Minimum 15 cm -> 15 cm
+    // Min. 10 cm -> 10 cm
     if (
-      /^(minimaal|minimum|min\.)\s*:?\s*/i.test(
-        text
-      )
+      /^(minimaal|minimum|min\.)\s*:?\s*/i.test(text)
     ) {
       const cleanedDiameter = text
         .replace(
@@ -1207,52 +1195,95 @@ function scrapeAttributes(card) {
       ) {
         attrs.Diameter =
           cleanedDiameter;
-
         continue;
       }
     }
 
-    // ==========================================
-    // LENGTH
-    //
-    // sequence 1 + cm/mm
-    // ==========================================
+    // LENGTH ICON
+    const isLengthIcon =
+      svgPath.includes("M3.372 11.333") ||
+      svgPath.includes("2.167 5.205");
 
     if (
-      sequence === "1" &&
+      isLengthIcon &&
       /\b(cm|mm)\b/i.test(text)
     ) {
       attrs.Length = text;
       continue;
     }
 
-    // ==========================================
-    // DIAMETER FALLBACK
-    //
-    // sequence 2 + cm/mm
-    //
-    // Example:
-    // 9 cm
-    // ==========================================
+    // DIAMETER ICON
+    const isDiameterIcon =
+      svgPath.includes("M5.906 14.144") ||
+      svgPath.includes("M5.167 8.37") ||
+      svgPath.includes("4.667-4.667");
 
     if (
-      sequence === "2" &&
+      isDiameterIcon &&
       /\b(cm|mm)\b/i.test(text)
     ) {
       attrs.Diameter = text;
       continue;
     }
 
-    // ==========================================
-    // QUALITY
-    //
-    // sequence 3
-    // A1
-    // ==========================================
+    // WEIGHT ICON FALLBACK
+    const isWeightIcon =
+      svgPath.includes("M4.737 12.5");
 
-    if (sequence === "3") {
+    if (isWeightIcon) {
+      attrs.Weight = text;
+      continue;
+    }
+
+    // QUALITY: A1, A2, etc.
+    if (
+      !hasSvg &&
+      /^[A-Za-z]\d+[A-Za-z0-9+\-]*$/.test(text)
+    ) {
       attrs.Quality = text;
       continue;
+    }
+
+    // CM/MM FALLBACK.
+    // Sequence is only a fallback, not the main meaning.
+    if (/\b(cm|mm)\b/i.test(text)) {
+      if (
+        sequence === "1" &&
+        attrs.Length === "N/A"
+      ) {
+        attrs.Length = text;
+        continue;
+      }
+
+      if (
+        sequence === "2" &&
+        attrs.Diameter === "N/A"
+      ) {
+        attrs.Diameter = text;
+        continue;
+      }
+
+      if (
+        attrs.Length === "N/A"
+      ) {
+        attrs.Length = text;
+        continue;
+      }
+
+      if (
+        attrs.Diameter === "N/A"
+      ) {
+        attrs.Diameter = text;
+        continue;
+      }
+    }
+
+    // QUALITY FALLBACK
+    if (
+      sequence === "3" &&
+      attrs.Quality === "N/A"
+    ) {
+      attrs.Quality = text;
     }
   }
 
@@ -1799,6 +1830,9 @@ async function collectAllProductsFromCurrentUrl(
       MAX_SCROLL_ROUNDS;
     round++
   ) {
+    // Give Vue/Nuxt time to finish rendering card characteristics.
+    await delay(600);
+
     // Capture currently mounted products
     const visibleProducts =
       await scrapeVisibleProducts(
