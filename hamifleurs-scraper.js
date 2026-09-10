@@ -581,203 +581,212 @@ async function setVueInput(
 // ============================================================
 
 async function login(page) {
-  console.log(
-    "🔐 Opening OZ-Hami login..."
-  );
+  console.log("🔐 Opening OZ-Hami login...");
 
-  await page.goto(
-    LOGIN_URL,
+  await page.goto(LOGIN_URL, {
+    waitUntil: "domcontentloaded",
+    timeout: 60000,
+  });
+
+  const usernameSelector = "#username";
+  const passwordSelector = "#password";
+  const loginSelector =
+    'button[type="submit"][aria-label="Login"]';
+
+  // --------------------------------------------------------
+  // WAIT FOR LOGIN FORM
+  // --------------------------------------------------------
+
+  await page.waitForSelector(usernameSelector, {
+    visible: true,
+    timeout: 30000,
+  });
+
+  await page.waitForSelector(passwordSelector, {
+    visible: true,
+    timeout: 30000,
+  });
+
+  await page.waitForSelector(loginSelector, {
+    visible: true,
+    timeout: 30000,
+  });
+
+  console.log("✅ Login form loaded");
+
+  // --------------------------------------------------------
+  // TYPE USERNAME LIKE A REAL USER
+  // --------------------------------------------------------
+
+  await page.click(usernameSelector);
+
+  await page.keyboard.down("Control");
+  await page.keyboard.press("A");
+  await page.keyboard.up("Control");
+
+  await page.keyboard.press("Backspace");
+
+  await page.type(
+    usernameSelector,
+    EMAIL,
     {
-      waitUntil:
-        "domcontentloaded",
-
-      timeout:
-        60000,
+      delay: 40,
     }
   );
 
-  await page.waitForSelector(
-    "#username",
+  // --------------------------------------------------------
+  // TYPE PASSWORD LIKE A REAL USER
+  // --------------------------------------------------------
+
+  await page.click(passwordSelector);
+
+  await page.keyboard.down("Control");
+  await page.keyboard.press("A");
+  await page.keyboard.up("Control");
+
+  await page.keyboard.press("Backspace");
+
+  await page.type(
+    passwordSelector,
+    PASSWORD,
     {
-      visible: true,
-      timeout: 20000,
+      delay: 40,
     }
   );
 
-  await page.waitForSelector(
-    "#password",
-    {
-      visible: true,
-      timeout: 20000,
-    }
-  );
+  // Give Vue time to update v-model
+  await delay(500);
 
-  await page.waitForSelector(
-    'button[type="submit"][aria-label="Login"]',
-    {
-      visible: true,
-      timeout: 20000,
-    }
-  );
+  // --------------------------------------------------------
+  // VERIFY DOM INPUTS
+  // --------------------------------------------------------
 
-  await setVueInput(
-    page,
-    "#username",
-    EMAIL
-  );
+  const inputState =
+    await page.evaluate(() => {
+      const username =
+        document.querySelector("#username");
 
-  await setVueInput(
-    page,
-    "#password",
-    PASSWORD
-  );
+      const password =
+        document.querySelector("#password");
 
-  console.log(
-    "👤 Login fields filled"
-  );
-
-  await page.evaluate(
-    () => {
       const button =
         document.querySelector(
           'button[type="submit"][aria-label="Login"]'
         );
 
-      if (!button) {
-        throw new Error(
-          "Login button not found."
-        );
-      }
+      return {
+        usernameLength:
+          username?.value?.length || 0,
 
-      const form =
-        button.closest(
-          "form"
-        );
+        passwordLength:
+          password?.value?.length || 0,
 
-      if (
-        form &&
-        typeof form.requestSubmit ===
-          "function"
-      ) {
-        form.requestSubmit(
-          button
-        );
-      } else {
-        button.click();
-      }
-    }
+        buttonDisabled:
+          Boolean(button?.disabled),
+      };
+    });
+
+  console.log(
+    `👤 Username chars: ${inputState.usernameLength}`
   );
 
-  // ----------------------------------------------------------
-  // WAIT FOR LOGIN
-  // ----------------------------------------------------------
+  console.log(
+    `🔑 Password chars: ${inputState.passwordLength}`
+  );
 
-  let loggedIn =
+  console.log(
+    `🔘 Login disabled: ${inputState.buttonDisabled}`
+  );
+
+  if (
+    inputState.usernameLength === 0 ||
+    inputState.passwordLength === 0
+  ) {
+    throw new Error(
+      "Username/password did not type into login form."
+    );
+  }
+
+  // --------------------------------------------------------
+  // CLICK LOGIN NORMALLY
+  // --------------------------------------------------------
+
+  console.log("➡️ Clicking Login...");
+
+  await page.click(loginSelector);
+
+  // --------------------------------------------------------
+  // WAIT FOR LOGIN RESULT
+  // --------------------------------------------------------
+
+  const loggedIn =
     await page
       .waitForFunction(
         () =>
-          !window
-            .location
-            .pathname
-            .includes(
-              "/login"
-            ),
-
+          !window.location.pathname.includes(
+            "/login"
+          ),
         {
-          timeout:
-            12000,
+          timeout: 30000,
         }
       )
-
-      .then(
-        () => true
-      )
-
-      .catch(
-        () => false
-      );
-
-  // ----------------------------------------------------------
-  // FALLBACK
-  // ----------------------------------------------------------
+      .then(() => true)
+      .catch(() => false);
 
   if (!loggedIn) {
+    // ------------------------------------------------------
+    // GET ACTUAL ERROR FROM PAGE
+    // ------------------------------------------------------
+
+    const diagnostic =
+      await page.evaluate(() => {
+        const bodyText =
+          document.body?.innerText || "";
+
+        return bodyText
+          .split(/\n+/)
+          .map((text) =>
+            text.trim()
+          )
+          .filter(Boolean)
+          .filter((text) =>
+            /required|invalid|incorrect|wrong|error|password|username|failed/i.test(
+              text
+            )
+          )
+          .slice(0, 15);
+      });
+
     console.log(
-      "ℹ️ Trying Enter fallback..."
+      "🔎 Login diagnostic:"
     );
 
-    await page.focus(
-      "#password"
+    diagnostic.forEach(
+      (text) =>
+        console.log(
+          `   ${text}`
+        )
     );
-
-    await page
-      .keyboard
-      .press(
-        "Enter"
-      );
-
-    loggedIn =
-      await page
-        .waitForFunction(
-          () =>
-            !window
-              .location
-              .pathname
-              .includes(
-                "/login"
-              ),
-
-          {
-            timeout:
-              30000,
-          }
-        )
-
-        .then(
-          () => true
-        )
-
-        .catch(
-          () => false
-        );
-  }
-
-  if (
-    !loggedIn ||
-    page.url().includes(
-      "/login"
-    )
-  ) {
-    const pageText =
-      await page
-        .evaluate(
-          () =>
-            document
-              .body
-              .innerText
-        )
-
-        .catch(
-          () => ""
-        );
 
     throw new Error(
-      `Hami login failed. ${sanitize(
-        pageText
-      ).substring(
-        0,
-        200
-      )}`
+      "Hami login failed. Site stayed on /login."
     );
   }
 
+  // --------------------------------------------------------
+  // LOGIN SUCCESS
+  // --------------------------------------------------------
+
+  await delay(1200);
+
   console.log(
-    `✅ Logged in: ${page.url()}`
+    `✅ Logged in successfully`
   );
 
-  await delay(1000);
+  console.log(
+    `🌐 Current URL: ${page.url()}`
+  );
 }
-
 // ============================================================
 // OPEN ASSORTMENT URL
 // ============================================================
