@@ -1073,46 +1073,62 @@ async function scrapeVisibleProducts(
       // FIND PRODUCT CARD ROOT
       // ======================================================
 
-      function findCardRoot(
-        titleElement
-      ) {
-        let current =
-          titleElement;
+      function findCardRoot(titleElement) {
+  let current = titleElement;
+  let fallback = null;
+  let level = 0;
 
-        let level =
-          0;
+  while (
+    current &&
+    current !== document.body &&
+    level < 20
+  ) {
+    const hasImage =
+      current.querySelector(
+        "div.product-card--top > img"
+      );
 
-        while (
-          current &&
-          current !==
-            document.body &&
-          level < 16
-        ) {
-          const hasImage =
-            current.querySelector(
-              "div.product-card--top > img"
-            );
+    const hasSpecifics =
+      current.querySelector(
+        "div.specifics"
+      );
 
-          const hasSpecifics =
-            current.querySelector(
-              "div.specifics"
-            );
+    const hasCharacteristics =
+      current.querySelector(
+        "ul.characteristics"
+      );
 
-          if (
-            hasImage &&
-            hasSpecifics
-          ) {
-            return current;
-          }
+    const hasOrderOptions =
+      current.querySelector(
+        "div.product-order-row"
+      );
 
-          current =
-            current.parentElement;
+    // Keep a fallback for products that genuinely
+    // do not have characteristics/order rows.
+    if (
+      hasImage &&
+      hasSpecifics
+    ) {
+      fallback = current;
+    }
 
-          level++;
-        }
+    // Prefer the full product card containing
+    // image + specifics + characteristics + order options.
+    if (
+      hasImage &&
+      hasSpecifics &&
+      hasCharacteristics &&
+      hasOrderOptions
+    ) {
+      return current;
+    }
 
-        return null;
-      }
+    current = current.parentElement;
+    level++;
+  }
+
+  return fallback;
+}
 
       // ======================================================
       // PRODUCT ATTRIBUTES
@@ -1127,9 +1143,10 @@ function scrapeAttributes(card) {
     NoOfBuds: "N/A",
   };
 
-  // Do not depend on one exact <ul> nesting.
   const items = Array.from(
-    card.querySelectorAll("li[data-sequence]")
+    card.querySelectorAll(
+      "ul.characteristics li[data-sequence]"
+    )
   );
 
   for (const item of items) {
@@ -1148,17 +1165,23 @@ function scrapeAttributes(card) {
       item.querySelector("svg path")
         ?.getAttribute("d") || "";
 
-    const hasSvg =
-      Boolean(item.querySelector("svg"));
+    // ======================================================
+    // NO OF BUDS
+    // 5+, 7+, 10+
+    // ======================================================
 
-    // NO OF BUDS: 5+, 7+, 10+
     if (/^\d+\s*\+$/.test(text)) {
       attrs.NoOfBuds =
         text.replace(/\s+/g, "");
+
       continue;
     }
 
-    // WEIGHT: 55 gr, 75 gr, 1 kg
+    // ======================================================
+    // WEIGHT
+    // 55 gr, 75 gr, 1 kg
+    // ======================================================
+
     if (
       /\b(gr|gram|grams|kg)\b/i.test(text)
     ) {
@@ -1166,40 +1189,36 @@ function scrapeAttributes(card) {
       continue;
     }
 
-    // DIAMETER BY TEXT:
+    // ======================================================
+    // DIAMETER BY TEXT
     // Minimaal 9 cm -> 9 cm
     // Minimum 15 cm -> 15 cm
     // Min. 10 cm -> 10 cm
+    // ======================================================
+
     if (
       /^(minimaal|minimum|min\.)\s*:?\s*/i.test(text)
     ) {
       const cleanedDiameter = text
-        .replace(
-          /^minimaal\s*:?\s*/i,
-          ""
-        )
-        .replace(
-          /^minimum\s*:?\s*/i,
-          ""
-        )
-        .replace(
-          /^min\.?\s*:?\s*/i,
-          ""
-        )
+        .replace(/^minimaal\s*:?\s*/i, "")
+        .replace(/^minimum\s*:?\s*/i, "")
+        .replace(/^min\.?\s*:?\s*/i, "")
         .trim();
 
       if (
-        /\b(cm|mm)\b/i.test(
-          cleanedDiameter
-        )
+        /\b(cm|mm)\b/i.test(cleanedDiameter)
       ) {
         attrs.Diameter =
           cleanedDiameter;
+
         continue;
       }
     }
 
+    // ======================================================
     // LENGTH ICON
+    // ======================================================
+
     const isLengthIcon =
       svgPath.includes("M3.372 11.333") ||
       svgPath.includes("2.167 5.205");
@@ -1212,7 +1231,10 @@ function scrapeAttributes(card) {
       continue;
     }
 
+    // ======================================================
     // DIAMETER ICON
+    // ======================================================
+
     const isDiameterIcon =
       svgPath.includes("M5.906 14.144") ||
       svgPath.includes("M5.167 8.37") ||
@@ -1226,7 +1248,10 @@ function scrapeAttributes(card) {
       continue;
     }
 
+    // ======================================================
     // WEIGHT ICON FALLBACK
+    // ======================================================
+
     const isWeightIcon =
       svgPath.includes("M4.737 12.5");
 
@@ -1235,55 +1260,37 @@ function scrapeAttributes(card) {
       continue;
     }
 
-    // QUALITY: A1, A2, etc.
+    // ======================================================
+    // LENGTH FALLBACK
+    // ======================================================
+
     if (
-      !hasSvg &&
-      /^[A-Za-z]\d+[A-Za-z0-9+\-]*$/.test(text)
+      sequence === "1" &&
+      /\b(cm|mm)\b/i.test(text)
     ) {
-      attrs.Quality = text;
+      attrs.Length = text;
       continue;
     }
 
-    // CM/MM FALLBACK.
-    // Sequence is only a fallback, not the main meaning.
-    if (/\b(cm|mm)\b/i.test(text)) {
-      if (
-        sequence === "1" &&
-        attrs.Length === "N/A"
-      ) {
-        attrs.Length = text;
-        continue;
-      }
+    // ======================================================
+    // DIAMETER FALLBACK
+    // ======================================================
 
-      if (
-        sequence === "2" &&
-        attrs.Diameter === "N/A"
-      ) {
-        attrs.Diameter = text;
-        continue;
-      }
-
-      if (
-        attrs.Length === "N/A"
-      ) {
-        attrs.Length = text;
-        continue;
-      }
-
-      if (
-        attrs.Diameter === "N/A"
-      ) {
-        attrs.Diameter = text;
-        continue;
-      }
+    if (
+      sequence === "2" &&
+      /\b(cm|mm)\b/i.test(text)
+    ) {
+      attrs.Diameter = text;
+      continue;
     }
 
-    // QUALITY FALLBACK
-    if (
-      sequence === "3" &&
-      attrs.Quality === "N/A"
-    ) {
+    // ======================================================
+    // QUALITY
+    // ======================================================
+
+    if (sequence === "3") {
       attrs.Quality = text;
+      continue;
     }
   }
 
@@ -1830,7 +1837,7 @@ async function collectAllProductsFromCurrentUrl(
       MAX_SCROLL_ROUNDS;
     round++
   ) {
-    // Give Vue/Nuxt time to finish rendering card characteristics.
+    // Give Vue/Nuxt time to finish rendering product characteristics.
     await delay(600);
 
     // Capture currently mounted products
