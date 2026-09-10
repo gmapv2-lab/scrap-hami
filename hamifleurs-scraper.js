@@ -500,155 +500,136 @@ async function appendProductsToSheet(
 // ============================================================
 
 async function login(page) {
-  console.log(
-    "🔐 Opening OZ-Hami login..."
-  );
+  console.log("🔐 Opening OZ-Hami login...");
 
-  await page.goto(
-    LOGIN_URL,
-    {
-      waitUntil:
-        "domcontentloaded",
+  await page.goto(LOGIN_URL, {
+    waitUntil: "domcontentloaded",
+    timeout: 60000,
+  });
 
-      timeout:
-        60000,
-    }
-  );
-
-  const usernameSelector =
-    "#username";
-
-  const passwordSelector =
-    "#password";
-
+  const usernameSelector = "#username";
+  const passwordSelector = "#password";
   const loginSelector =
     'button[type="submit"][aria-label="Login"]';
 
-  // ==========================================================
-  // WAIT FORM
-  // ==========================================================
+  // =========================================================
+  // WAIT FOR LOGIN FORM
+  // =========================================================
 
-  await page.waitForSelector(
-    usernameSelector,
-    {
-      visible: true,
-      timeout: 30000,
-    }
-  );
+  await page.waitForSelector(usernameSelector, {
+    visible: true,
+    timeout: 30000,
+  });
 
-  await page.waitForSelector(
-    passwordSelector,
-    {
-      visible: true,
-      timeout: 30000,
-    }
-  );
+  await page.waitForSelector(passwordSelector, {
+    visible: true,
+    timeout: 30000,
+  });
 
-  await page.waitForSelector(
-    loginSelector,
-    {
-      visible: true,
-      timeout: 30000,
-    }
-  );
+  await page.waitForSelector(loginSelector, {
+    visible: true,
+    timeout: 30000,
+  });
 
-  console.log(
-    "✅ Login form loaded"
-  );
+  console.log("✅ Login form loaded");
 
-  // ==========================================================
-  // ROBUST INPUT FILL
-  // ==========================================================
+  // =========================================================
+  // INPUT FILLER
+  // Compatible with older Puppeteer
+  // =========================================================
 
-  async function fillInput(
-    selector,
-    value
-  ) {
+  async function fillInput(selector, value) {
     if (!value) {
       throw new Error(
         `Missing value for ${selector}`
       );
     }
 
-    const stringValue =
-      String(value);
+    const stringValue = String(value);
 
     // Focus input
-    await page.click(
-      selector
+    await page.focus(selector);
+
+    // -------------------------------------------------------
+    // CLEAR INPUT USING NATIVE SETTER
+    // -------------------------------------------------------
+
+    await page.$eval(
+      selector,
+      (element) => {
+        const setter =
+          Object.getOwnPropertyDescriptor(
+            HTMLInputElement.prototype,
+            "value"
+          )?.set;
+
+        if (setter) {
+          setter.call(element, "");
+        } else {
+          element.value = "";
+        }
+
+        element.dispatchEvent(
+          new Event("input", {
+            bubbles: true,
+          })
+        );
+
+        element.dispatchEvent(
+          new Event("change", {
+            bubbles: true,
+          })
+        );
+      }
     );
 
-    // Clear existing value
-    await page.keyboard.down(
-      "Control"
+    // -------------------------------------------------------
+    // TYPE LIKE REAL KEYBOARD
+    //
+    // keyboard.type works with older Puppeteer
+    // -------------------------------------------------------
+
+    await page.focus(selector);
+
+    await page.keyboard.type(
+      stringValue,
+      {
+        delay: 50,
+      }
     );
 
-    await page.keyboard.press(
-      "A"
-    );
-
-    await page.keyboard.up(
-      "Control"
-    );
-
-    await page.keyboard.press(
-      "Backspace"
-    );
-
-    // ========================================================
-    // METHOD 1
-    // insertText
-    // ========================================================
-
-    await page.keyboard.insertText(
-      stringValue
-    );
-
-    await delay(
-      400
-    );
+    await delay(500);
 
     let currentLength =
       await page.$eval(
         selector,
-
         (element) =>
-          element.value
-            ?.length || 0
+          element.value?.length || 0
       );
 
     console.log(
-      `📝 ${selector} after insertText: ${currentLength} chars`
+      `📝 ${selector} after keyboard.type: ${currentLength} chars`
     );
 
-    // ========================================================
-    // METHOD 2 FALLBACK
-    // Native setter + Vue input event
-    // ========================================================
+    // =======================================================
+    // FALLBACK
+    // =======================================================
 
-    if (
-      currentLength === 0
-    ) {
+    if (currentLength === 0) {
       console.log(
-        `⚠️ ${selector} insertText failed. Trying native setter...`
+        `⚠️ ${selector} keyboard.type failed. Trying native setter...`
       );
 
       await page.$eval(
         selector,
-
-        (
-          element,
-          newValue
-        ) => {
+        (element, newValue) => {
           element.focus();
 
           const setter =
-            Object
-              .getOwnPropertyDescriptor(
-                HTMLInputElement.prototype,
-                "value"
-              )
-              ?.set;
+            Object.getOwnPropertyDescriptor(
+              HTMLInputElement.prototype,
+              "value"
+            )?.set;
 
           if (setter) {
             setter.call(
@@ -660,57 +641,49 @@ async function login(page) {
               newValue;
           }
 
+          // Vue/Nuxt input update
           element.dispatchEvent(
-            new InputEvent(
-              "input",
-              {
-                bubbles: true,
-
-                inputType:
-                  "insertText",
-
-                data: null,
-              }
-            )
+            new Event("input", {
+              bubbles: true,
+            })
           );
 
           element.dispatchEvent(
-            new Event(
-              "change",
-              {
-                bubbles: true,
-              }
-            )
+            new Event("change", {
+              bubbles: true,
+            })
+          );
+
+          element.dispatchEvent(
+            new Event("blur", {
+              bubbles: true,
+            })
           );
         },
 
         stringValue
       );
 
-      await delay(
-        400
-      );
+      await delay(500);
 
       currentLength =
         await page.$eval(
           selector,
-
           (element) =>
-            element.value
-              ?.length || 0
+            element.value?.length || 0
         );
 
       console.log(
-        `📝 ${selector} after native fallback: ${currentLength} chars`
+        `📝 ${selector} after native setter: ${currentLength} chars`
       );
     }
 
     return currentLength;
   }
 
-  // ==========================================================
+  // =========================================================
   // USERNAME
-  // ==========================================================
+  // =========================================================
 
   const usernameLength =
     await fillInput(
@@ -722,9 +695,9 @@ async function login(page) {
     `👤 Username chars: ${usernameLength}`
   );
 
-  // ==========================================================
+  // =========================================================
   // PASSWORD
-  // ==========================================================
+  // =========================================================
 
   const passwordLength =
     await fillInput(
@@ -736,46 +709,38 @@ async function login(page) {
     `🔑 Password chars: ${passwordLength}`
   );
 
-  // ==========================================================
-  // VERIFY FINAL VALUES
-  // ==========================================================
+  // =========================================================
+  // FINAL CHECK
+  // =========================================================
 
   const inputState =
-    await page.evaluate(
-      () => {
-        const username =
-          document.querySelector(
-            "#username"
-          );
+    await page.evaluate(() => {
+      const username =
+        document.querySelector(
+          "#username"
+        );
 
-        const password =
-          document.querySelector(
-            "#password"
-          );
+      const password =
+        document.querySelector(
+          "#password"
+        );
 
-        const button =
-          document.querySelector(
-            'button[type="submit"][aria-label="Login"]'
-          );
+      const button =
+        document.querySelector(
+          'button[type="submit"][aria-label="Login"]'
+        );
 
-        return {
-          usernameLength:
-            username
-              ?.value
-              ?.length || 0,
+      return {
+        usernameLength:
+          username?.value?.length || 0,
 
-          passwordLength:
-            password
-              ?.value
-              ?.length || 0,
+        passwordLength:
+          password?.value?.length || 0,
 
-          buttonDisabled:
-            Boolean(
-              button?.disabled
-            ),
-        };
-      }
-    );
+        buttonDisabled:
+          Boolean(button?.disabled),
+      };
+    });
 
   console.log(
     `👤 Final username chars: ${inputState.usernameLength}`
@@ -790,25 +755,25 @@ async function login(page) {
   );
 
   if (
-    !inputState.usernameLength ||
-    !inputState.passwordLength
+    inputState.usernameLength === 0 ||
+    inputState.passwordLength === 0
   ) {
     throw new Error(
       "Username/password could not be filled into OZ-Hami login form."
     );
   }
 
-  // ==========================================================
-  // LOGIN
-  // ==========================================================
+  // =========================================================
+  // CLICK LOGIN
+  // =========================================================
 
-  console.log(
-    "➡️ Clicking Login..."
-  );
+  console.log("➡️ Clicking Login...");
 
-  await page.click(
-    loginSelector
-  );
+  await page.click(loginSelector);
+
+  // =========================================================
+  // WAIT FOR LOGIN REDIRECT
+  // =========================================================
 
   let loggedIn =
     await page
@@ -817,24 +782,16 @@ async function login(page) {
           !window.location.pathname.includes(
             "/login"
           ),
-
         {
-          timeout:
-            20000,
+          timeout: 20000,
         }
       )
+      .then(() => true)
+      .catch(() => false);
 
-      .then(
-        () => true
-      )
-
-      .catch(
-        () => false
-      );
-
-  // ==========================================================
+  // =========================================================
   // ENTER FALLBACK
-  // ==========================================================
+  // =========================================================
 
   if (!loggedIn) {
     console.log(
@@ -856,66 +813,40 @@ async function login(page) {
             !window.location.pathname.includes(
               "/login"
             ),
-
           {
-            timeout:
-              20000,
+            timeout: 20000,
           }
         )
-
-        .then(
-          () => true
-        )
-
-        .catch(
-          () => false
-        );
+        .then(() => true)
+        .catch(() => false);
   }
 
-  // ==========================================================
-  // LOGIN FAILED
-  // ==========================================================
+  // =========================================================
+  // FAILED
+  // =========================================================
 
   if (
     !loggedIn ||
-    page.url().includes(
-      "/login"
-    )
+    page.url().includes("/login")
   ) {
     const diagnostic =
-      await page.evaluate(
-        () => {
-          const bodyText =
-            document.body
-              ?.innerText || "";
+      await page.evaluate(() => {
+        const bodyText =
+          document.body?.innerText || "";
 
-          return bodyText
-            .split(
-              /\n+/
+        return bodyText
+          .split(/\n+/)
+          .map((text) =>
+            text.trim()
+          )
+          .filter(Boolean)
+          .filter((text) =>
+            /required|invalid|incorrect|wrong|error|failed|username|password/i.test(
+              text
             )
-
-            .map(
-              (text) =>
-                text.trim()
-            )
-
-            .filter(
-              Boolean
-            )
-
-            .filter(
-              (text) =>
-                /required|invalid|incorrect|wrong|error|failed|username|password/i.test(
-                  text
-                )
-            )
-
-            .slice(
-              0,
-              15
-            );
-        }
-      );
+          )
+          .slice(0, 15);
+      });
 
     console.log(
       "🔎 Login diagnostic:"
@@ -933,9 +864,11 @@ async function login(page) {
     );
   }
 
-  await delay(
-    1200
-  );
+  // =========================================================
+  // SUCCESS
+  // =========================================================
+
+  await delay(1200);
 
   console.log(
     "✅ Logged in successfully"
@@ -945,7 +878,6 @@ async function login(page) {
     `🌐 Current URL: ${page.url()}`
   );
 }
-
 // ============================================================
 // OPEN ASSORTMENT
 // ============================================================
