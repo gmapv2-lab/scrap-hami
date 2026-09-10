@@ -1,506 +1,2481 @@
-const puppeteer = require("puppeteer");
 const { google } = require("googleapis");
-const dayjs = require("dayjs");
+const path = require("path");
 
-// Constants
-const LOGIN_URL = "https://www.hamifleurs.nl/hami/en/EUR/login";
-const SHEET_NAME = "Hami-Products";
+let puppeteer;
+
+try {
+  puppeteer = require("puppeteer-core");
+} catch {
+  puppeteer = require("puppeteer");
+}
+
+// ============================================================
+// CONFIG
+// ============================================================
+
+// Can still be overridden by your existing GitHub secret LOGIN_URL
+const LOGIN_URL =
+  process.env.LOGIN_URL ||
+  "https://app.oz-hami.nl/login";
+
+const SHEET_NAME =
+  process.env.SHEET_NAME ||
+  "Hami-Products";
+
 const CONFIG_SHEET = "_config";
-const CONFIG_RANGE = "C9"; // Packing date cell
-const STATUS_CELL = "F9"; // Status cell
-const CREDENTIALS_PATH = "./service-account.json";
-const SPREADSHEET_ID = "1zkZj6I-BMjYutnp2sLIg1GMB-9sNhdF4cV1YR51P1yg";
-const EMAIL = process.env.HAMI_USERNAME || "hf470035";
-const PASSWORD = process.env.HAMI_PASSWORD || "Dom@hami2024";
+const STATUS_CELL = "F9";
 
-// Helpers
-function sanitize(text) {
-  return text?.replace(/\s+/g, " ").trim() || "";
+const SPREADSHEET_ID =
+  process.env.SPREADSHEET_ID;
+
+const CREDENTIALS_PATH =
+  process.env.CREDENTIALS_PATH ||
+  "./service-account.json";
+
+const EMAIL =
+  process.env.HAMI_USERNAME;
+
+const PASSWORD =
+  process.env.HAMI_PASSWORD;
+
+// ------------------------------------------------------------
+// THESE COME FROM YOUR EXISTING GITHUB ACTION
+// ------------------------------------------------------------
+//
+// PACKING_DATE:
+// Example:
+// 09/11/2026
+//
+// URLS:
+// https://app.oz-hami.nl/assortment?mcid=1,
+// https://app.oz-hami.nl/assortment?mcid=2
+//
+// ------------------------------------------------------------
+
+const PACKING_DATE =
+  (process.env.PACKING_DATE || "").trim();
+
+const URLS =
+  (process.env.URLS || "")
+    .split(",")
+    .map((url) => url.trim())
+    .filter(Boolean);
+
+const PUPPETEER_EXECUTABLE_PATH =
+  process.env.PUPPETEER_EXECUTABLE_PATH ||
+  "/usr/bin/google-chrome";
+
+const MAX_SCROLL_ROUNDS = 350;
+
+const STABLE_BOTTOM_ROUNDS = 6;
+
+// ============================================================
+// OUTPUT COLUMNS
+// ============================================================
+
+const HEADERS = [
+  "Name",
+  "Tag",
+  "Image URL",
+  "Origin",
+  "Length",
+  "Diameter",
+  "Quality",
+  "Weight",
+  "No of Buds",
+  "Takken",
+  "Certificate",
+  "Color",
+  "Grower",
+  "Box Quantity",
+  "Stem Price",
+  "First Quantity",
+  "Available Quantity",
+  "ProductUrl",
+  "Time",
+];
+
+// ============================================================
+// HELPERS
+// ============================================================
+
+const delay = (ms) =>
+  new Promise((resolve) =>
+    setTimeout(resolve, ms)
+  );
+
+function sanitize(value) {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function getUaeTimeFormatted() {
-  return dayjs().add(4, "hour").format("DD/MM/YYYY HH:mm:ss");
-}
-
-// --- Format runtime (ms) as "42s" or "2m 13s" or "1h 5m 20s" ---
 function formatRuntime(ms) {
-  const totalSeconds = Math.floor(ms / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
+  const totalSeconds =
+    Math.floor(ms / 1000);
+
+  const hours =
+    Math.floor(
+      totalSeconds / 3600
+    );
+
+  const minutes =
+    Math.floor(
+      (totalSeconds % 3600) / 60
+    );
+
+  const seconds =
+    totalSeconds % 60;
 
   if (hours > 0) {
     return `${hours}h ${minutes}m ${seconds}s`;
-  } else if (minutes > 0) {
+  }
+
+  if (minutes > 0) {
     return `${minutes}m ${seconds}s`;
-  } else if (seconds > 0) {
-    return `${seconds}s`;
-  } else {
-    return `${ms}ms`;
-  }
-}
-
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-// Google Sheets Auth
-async function getGoogleSheetClient() {
-  const auth = new google.auth.GoogleAuth({
-    keyFile: CREDENTIALS_PATH,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-  });
-  const client = await auth.getClient();
-  return google.sheets({ version: "v4", auth: client });
-}
-
-// Update status in Google Sheet
-async function updateStatus(sheets, status, startTime, errorMessage) {
-  const runtime = formatRuntime(Date.now() - startTime);
-  const timestamp = getUaeTimeFormatted();
-
-  let statusText;
-
-  switch (status) {
-    case "running":
-      statusText = `🟡 Scraping in progress...`;
-      break;
-    case "success":
-      statusText = `✅ ${timestamp} — ${runtime}`;
-      break;
-    case "error":
-      statusText = `❌ Failed ${timestamp} — ${runtime}${errorMessage ? ` - ${errorMessage}` : ""}`;
-      break;
-    case "no-products":
-      statusText = `⚠️ No products found ${timestamp} — ${runtime}`;
-      break;
-    default:
-      statusText = `${timestamp}`;
   }
 
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${CONFIG_SHEET}!${STATUS_CELL}`,
-    valueInputOption: "USER_ENTERED",
-    requestBody: { values: [[statusText]] },
-  });
-
-  console.log(`📊 Status updated: ${statusText}`);
+  return `${seconds}s`;
 }
 
-// Get packing date from Google Sheet
-async function getPackingDate(sheets) {
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${CONFIG_SHEET}!${CONFIG_RANGE}`,
-  });
-  return res.data.values?.[0]?.[0] || dayjs().format("YYYY-MM-DD");
-}
+// ============================================================
+// UAE TIME
+// ============================================================
 
-// Select packing date, check if disabled, handle popup safely
-async function selectPackingDate(page, dateStr) {
-  // Wait and click the date input
-  await page.waitForSelector("input.js-show_date", { visible: true });
-  await page.click("input.js-show_date");
+function getUaeTimeFormatted() {
+  const parts =
+    new Intl.DateTimeFormat(
+      "en-GB",
+      {
+        timeZone: "Asia/Dubai",
 
-  const formatted = dayjs(dateStr).format("MM/DD/YYYY");
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
 
-  // Check if date is disabled
-  const isDisabled = await page.$(`td.day.disabled[data-day="${formatted}"]`);
-  if (isDisabled) {
-    console.log(`⚠️ Date ${dateStr} is disabled → No products available.`);
-    return false;
-  }
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
 
-  // Select active date
-  const activeDate = await page.$(`td.day[data-day="${formatted}"]`);
-  if (activeDate) {
-    // Scroll into view and wait a bit
-    await page.evaluate(
-      (el) => el.scrollIntoView({ behavior: "auto", block: "center" }),
-      activeDate
-    );
-    await delay(300);
-
-    try {
-      await activeDate.click({ delay: 100 });
-      console.log(`📅 Selected active date: ${dateStr}`);
-    } catch (err) {
-      console.log(`❌ Failed to click active date: ${err.message}`);
-      // fallback: click via JS
-      await page.evaluate((el) => el.click(), activeDate);
-      console.log(`✅ Clicked active date via JS fallback`);
-    }
-  } else {
-    console.log(`⚠️ Date ${dateStr} not found in the calendar.`);
-    return false;
-  }
-
-  // Close popup if it exists
-  try {
-    const datePopupClose = await page.waitForSelector("#cboxClose", {
-      visible: true,
-      timeout: 2000,
-    });
-    if (datePopupClose) {
-      try {
-        await datePopupClose.click();
-        console.log("📦 Date popup closed.");
-      } catch {
-        // fallback click via JS
-        await page.evaluate((el) => el.click(), datePopupClose);
-        console.log("📦 Date popup closed via JS fallback.");
+        hour12: false,
       }
-      await delay(300); // ensure overlay disappears
-    }
-  } catch {
-    console.log("ℹ️ No date popup to close.");
-  }
+    ).formatToParts(
+      new Date()
+    );
 
-  // Wait for products to load
-  try {
-    await page.waitForSelector("div.product-item", {
-      visible: true,
-      timeout: 10000,
-    });
-    console.log("✅ Products loaded for selected date.");
-    return true;
-  } catch {
-    console.log(`⚠️ No products loaded after selecting ${dateStr}`);
-    return false;
-  }
+  const map =
+    Object.fromEntries(
+      parts.map(
+        (part) => [
+          part.type,
+          part.value,
+        ]
+      )
+    );
+
+  return (
+    `${map.day}/${map.month}/${map.year} ` +
+    `${map.hour}:${map.minute}:${map.second}`
+  );
 }
 
-// Scrape product attributes dynamically
-async function scrapeProductAttributes(product) {
-  const attrMap = {
-    length_icon: "Length",
-    diameter_icon: "Diameter",
-    quality_icon: "Quality",
-    weight_icon: "Weight",
-    takken_icon: "Takken",
-    certificate_icon: "Certificate",
+// ============================================================
+// PACKING DATE
+// ============================================================
+//
+// Apps Script sends:
+//
+// 09/11/2026
+//
+// which means:
+//
+// September 11 2026
+//
+// ============================================================
+
+function parsePackingDate(value) {
+  const match =
+    String(value).match(
+      /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/
+    );
+
+  if (!match) {
+    throw new Error(
+      `Invalid PACKING_DATE "${value}". ` +
+      `Expected MM/DD/YYYY.`
+    );
+  }
+
+  const month =
+    Number(match[1]);
+
+  const day =
+    Number(match[2]);
+
+  const year =
+    Number(match[3]);
+
+  const date =
+    new Date(
+      Date.UTC(
+        year,
+        month - 1,
+        day
+      )
+    );
+
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !==
+      month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    throw new Error(
+      `Invalid PACKING_DATE "${value}".`
+    );
+  }
+
+  return {
+    year,
+    month,
+    day,
+    date,
   };
+}
 
-  const result = {};
-  Object.values(attrMap).forEach((v) => (result[v] = "N/A"));
+// ============================================================
+// CREATE TEXT USED BY NEW HAMI CALENDAR
+// ============================================================
 
-  const items = await product.$$eval(
-    "ul.classification_attributes_first_row li",
-    (lis) =>
-      lis.map((li) => {
-        const icon = li.querySelector("i")?.className || "";
-        const value = li.querySelector("p")?.textContent.trim() || "N/A";
-        return { icon, value };
-      })
+function getShippingDateLabels(
+  packingDate
+) {
+  const {
+    day,
+    date,
+  } =
+    parsePackingDate(
+      packingDate
+    );
+
+  const weekday =
+    new Intl.DateTimeFormat(
+      "en-US",
+      {
+        weekday: "long",
+        timeZone: "UTC",
+      }
+    ).format(date);
+
+  const monthLong =
+    new Intl.DateTimeFormat(
+      "en-US",
+      {
+        month: "long",
+        timeZone: "UTC",
+      }
+    ).format(date);
+
+  const monthShort =
+    new Intl.DateTimeFormat(
+      "en-US",
+      {
+        month: "short",
+        timeZone: "UTC",
+      }
+    ).format(date);
+
+  return {
+    // Calendar:
+    // Friday, 11, September
+
+    optionText:
+      `${weekday}, ${day}, ${monthLong}`,
+
+    // Header:
+    // Friday 11 Sep
+
+    selectedText:
+      `${weekday} ${day} ${monthShort}`,
+  };
+}
+
+// ============================================================
+// GOOGLE SHEETS AUTH
+// ============================================================
+
+async function getGoogleSheetClient() {
+  if (!SPREADSHEET_ID) {
+    throw new Error(
+      "SPREADSHEET_ID missing."
+    );
+  }
+
+  const auth =
+    new google.auth.GoogleAuth({
+      keyFile:
+        CREDENTIALS_PATH,
+
+      scopes: [
+        "https://www.googleapis.com/auth/spreadsheets",
+      ],
+    });
+
+  const client =
+    await auth.getClient();
+
+  return google.sheets({
+    version: "v4",
+    auth: client,
+  });
+}
+
+// ============================================================
+// STATUS
+// ============================================================
+
+async function updateStatus(
+  sheets,
+  status,
+  startTime,
+  errorMessage = ""
+) {
+  const timestamp =
+    getUaeTimeFormatted();
+
+  const runtime =
+    formatRuntime(
+      Date.now() -
+        startTime
+    );
+
+  let statusText =
+    timestamp;
+
+  if (
+    status === "running"
+  ) {
+    statusText =
+      `🟡 Scraping in progress... ${timestamp}`;
+  }
+
+  else if (
+    status === "success"
+  ) {
+    statusText =
+      `✅ ${timestamp} — ${runtime}`;
+  }
+
+  else if (
+    status === "no-products"
+  ) {
+    statusText =
+      `⚠️ No products found ${timestamp} — ${runtime}`;
+  }
+
+  else if (
+    status === "error"
+  ) {
+    statusText =
+      `❌ Failed ${timestamp} — ${runtime}`;
+
+    if (errorMessage) {
+      statusText +=
+        ` - ${errorMessage}`;
+    }
+  }
+
+  await sheets
+    .spreadsheets
+    .values
+    .update({
+      spreadsheetId:
+        SPREADSHEET_ID,
+
+      range:
+        `${CONFIG_SHEET}!${STATUS_CELL}`,
+
+      valueInputOption:
+        "USER_ENTERED",
+
+      requestBody: {
+        values: [
+          [statusText],
+        ],
+      },
+    });
+
+  console.log(
+    `📊 ${statusText}`
+  );
+}
+
+// ============================================================
+// CLEAR HAMI PRODUCTS + ADD HEADERS
+// ============================================================
+
+async function prepareOutputSheet(
+  sheets
+) {
+  await sheets
+    .spreadsheets
+    .values
+    .clear({
+      spreadsheetId:
+        SPREADSHEET_ID,
+
+      range:
+        SHEET_NAME,
+    });
+
+  console.log(
+    `🧹 Cleared ${SHEET_NAME}`
   );
 
-  items.forEach((item) => {
-    for (const key in attrMap) {
-      if (item.icon.includes(key)) {
-        result[attrMap[key]] = item.value;
+  await sheets
+    .spreadsheets
+    .values
+    .update({
+      spreadsheetId:
+        SPREADSHEET_ID,
+
+      range:
+        `${SHEET_NAME}!A1`,
+
+      valueInputOption:
+        "RAW",
+
+      requestBody: {
+        values: [
+          HEADERS,
+        ],
+      },
+    });
+
+  console.log(
+    "✅ Headers written"
+  );
+}
+
+// ============================================================
+// APPEND PRODUCTS TO SHEET
+// ============================================================
+
+async function appendProductsToSheet(
+  sheets,
+  products
+) {
+  if (!products.length) {
+    return;
+  }
+
+  const rows =
+    products.map(
+      (product) =>
+        HEADERS.map(
+          (header) =>
+            product[header] ??
+            "N/A"
+        )
+    );
+
+  const chunkSize =
+    500;
+
+  for (
+    let i = 0;
+    i < rows.length;
+    i += chunkSize
+  ) {
+    const chunk =
+      rows.slice(
+        i,
+        i + chunkSize
+      );
+
+    await sheets
+      .spreadsheets
+      .values
+      .append({
+        spreadsheetId:
+          SPREADSHEET_ID,
+
+        range:
+          `${SHEET_NAME}!A:S`,
+
+        valueInputOption:
+          "RAW",
+
+        insertDataOption:
+          "INSERT_ROWS",
+
+        requestBody: {
+          values: chunk,
+        },
+      });
+  }
+}
+
+// ============================================================
+// VUE INPUT HELPER
+// ============================================================
+
+async function setVueInput(
+  page,
+  selector,
+  value
+) {
+  await page.$eval(
+    selector,
+
+    (
+      element,
+      newValue
+    ) => {
+      const descriptor =
+        Object
+          .getOwnPropertyDescriptor(
+            HTMLInputElement.prototype,
+            "value"
+          );
+
+      descriptor.set.call(
+        element,
+        newValue
+      );
+
+      element.dispatchEvent(
+        new Event(
+          "input",
+          {
+            bubbles: true,
+          }
+        )
+      );
+
+      element.dispatchEvent(
+        new Event(
+          "change",
+          {
+            bubbles: true,
+          }
+        )
+      );
+
+      element.dispatchEvent(
+        new Event(
+          "blur",
+          {
+            bubbles: true,
+          }
+        )
+      );
+    },
+
+    value
+  );
+}
+
+// ============================================================
+// LOGIN
+// ============================================================
+
+async function login(page) {
+  console.log(
+    "🔐 Opening OZ-Hami login..."
+  );
+
+  await page.goto(
+    LOGIN_URL,
+    {
+      waitUntil:
+        "domcontentloaded",
+
+      timeout:
+        60000,
+    }
+  );
+
+  await page.waitForSelector(
+    "#username",
+    {
+      visible: true,
+      timeout: 20000,
+    }
+  );
+
+  await page.waitForSelector(
+    "#password",
+    {
+      visible: true,
+      timeout: 20000,
+    }
+  );
+
+  await page.waitForSelector(
+    'button[type="submit"][aria-label="Login"]',
+    {
+      visible: true,
+      timeout: 20000,
+    }
+  );
+
+  await setVueInput(
+    page,
+    "#username",
+    EMAIL
+  );
+
+  await setVueInput(
+    page,
+    "#password",
+    PASSWORD
+  );
+
+  console.log(
+    "👤 Login fields filled"
+  );
+
+  await page.evaluate(
+    () => {
+      const button =
+        document.querySelector(
+          'button[type="submit"][aria-label="Login"]'
+        );
+
+      if (!button) {
+        throw new Error(
+          "Login button not found."
+        );
+      }
+
+      const form =
+        button.closest(
+          "form"
+        );
+
+      if (
+        form &&
+        typeof form.requestSubmit ===
+          "function"
+      ) {
+        form.requestSubmit(
+          button
+        );
+      } else {
+        button.click();
       }
     }
-  });
+  );
 
-  return result;
-}
+  // ----------------------------------------------------------
+  // WAIT FOR LOGIN
+  // ----------------------------------------------------------
 
-// Scrape products on page
-async function scrapeProducts(page) {
-  await page.waitForSelector("div.product-item", { visible: true });
-  const products = await page.$$("div.product-item");
-  const time = getUaeTimeFormatted();
-  const results = [];
+  let loggedIn =
+    await page
+      .waitForFunction(
+        () =>
+          !window
+            .location
+            .pathname
+            .includes(
+              "/login"
+            ),
 
-  for (const product of products) {
-    try {
-      const name = await product
-        .$eval("div.name_fav span a", (el) => el.textContent.trim())
-        .catch(() => "N/A");
-      const tag = await product
-        .$eval("span.tag", (el) => el.textContent.trim())
-        .catch(() => "N/A");
-      const imgUrl = await product
-        .$eval("div.thumnail_section img", (el) => el.src)
-        .catch(() => "");
-      const origin = await product
-        .$eval("div.country_icon_outer > div.text", (el) =>
-          el.textContent.trim()
-        )
-        .catch(() => "N/A");
-
-      const attrs = await scrapeProductAttributes(product);
-
-      const labelText = await product
-        .$eval("div.classification_label_attributes", (el) => el.textContent)
-        .catch(() => "");
-      const growerMatch = labelText.match(/Grower:\s*([^\n\r]+)/i);
-      const grower = growerMatch ? growerMatch[1].trim() : "N/A";
-
-      const colorMatch = labelText.match(/Main Color:\s*([^\n\r]+)/i);
-      const color = colorMatch ? colorMatch[1].trim() : "N/A";
-
-      const BoxCode = await product
-        .$eval("div.text-left span.packaging_unit_code", (el) =>
-          el.textContent.trim().replace(/\(|\)/g, "")
-        )
-        .catch(() => "N/A");
-
-      const stemPrice = await product
-        .$eval(
-          "div.third_quantity.tier_price.clear span.price_text",
-          (el) => el.getAttribute("from-price")?.replace(",", ".") || "0"
-        )
-        .catch(() => "0");
-
-      const first_quantity = await product
-        .$eval(
-          "span.pieces_unit",
-          (el) => el.getAttribute("data-increment") || "0"
-        )
-        .catch(() => "0");
-
-      const available_quantity_text = await product
-        .$eval("div.first_quantity", (el) => el.textContent.trim())
-        .catch(() => "N/A");
-
-      const productUrl = await product
-        .$eval("div.thumnail_section a.thumb", (el) => el.href)
-        .catch(() => "N/A");
-
-      results.push([
-        sanitize(name),
-        sanitize(tag),
-        imgUrl,
-        sanitize(origin),
-        attrs.Length,
-        attrs.Diameter,
-        attrs.Quality,
-        attrs.Weight,
-        attrs.Takken,
-        attrs.Certificate,
-        color,
-        grower,
-        BoxCode,
-        stemPrice,
-        first_quantity,
-        available_quantity_text,
-        productUrl,
-        time,
-      ]);
-    } catch (err) {
-      console.log(`❌ Error scraping product: ${err.message}`);
-    }
-  }
-
-  return results;
-}
-
-// Scrape products with pagination
-async function scrapeProductsWithPagination(page) {
-  const results = [];
-  let currentPage = 1;
-
-  while (true) {
-    console.log(`🕵️‍♂️ Scraping page ${currentPage}...`);
-
-    let productsOnPage = [];
-    try {
-      productsOnPage = await Promise.race([
-        scrapeProducts(page),
-        new Promise((resolve) => setTimeout(() => resolve([]), 15000)),
-      ]);
-    } catch (err) {
-      console.log(`❌ Error scraping page ${currentPage}:`, err);
-      break;
-    }
-
-    results.push(...productsOnPage);
-    console.log(
-      `✅ Found ${productsOnPage.length} products on page ${currentPage}. Total so far: ${results.length}`
-    );
-
-    const nextLi = await page.$("li.pagination-next");
-    if (!nextLi) break;
-
-    const nextLink = await nextLi.$("a[rel='next']");
-    if (!nextLink) break;
-
-    const isDisabled = await nextLi.evaluate(
-      (li) => li.classList.contains("hidden") || li.classList.contains("disabled")
-    );
-    if (isDisabled) break;
-
-    const nextHref = await nextLink.evaluate((a) => a.href);
-    currentPage++;
-    await page.goto(nextHref, { waitUntil: "networkidle2", timeout: 60000 });
-    await delay(1500);
-  }
-
-  console.log(`ℹ️ Pagination complete. Total products scraped: ${results.length}`);
-  return results;
-}
-
-// Main
-(async () => {
-  const startTime = Date.now(); // ⏱️ Start timer
-
-  let browser = null;
-  let sheets = null;
-  let totalProductsScraped = 0;
-
-  try {
-    // Initialize Google Sheets client early for status updates
-    sheets = await getGoogleSheetClient();
-
-    // Update status to "Running"
-    await updateStatus(sheets, "running", startTime);
-
-    // Launch browser
-    browser = await puppeteer.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
-    const page = await browser.newPage();
-    await page.evaluateOnNewDocument(() =>
-      Object.defineProperty(navigator, "webdriver", { get: () => false })
-    );
-
-    console.log("🔐 Logging in...");
-    await page.goto(LOGIN_URL, { waitUntil: "networkidle2", timeout: 60000 });
-    await page.type("#j_username", EMAIL);
-    await page.type("#j_password", PASSWORD);
-
-    await Promise.all([
-      page.click("button.primary_button"),
-      page.waitForNavigation({ waitUntil: "networkidle2", timeout: 120000 }).catch(() => {}),
-    ]);
-    console.log("✅ Logged in.");
-
-    const packingDate = await getPackingDate(sheets);
-    console.log("📅 Selected Packing Date:", packingDate);
-
-    const urls = (process.env.URLS || "").split(",").map((u) => u.trim()).filter(Boolean);
-    if (!urls.length) {
-      console.log("⚠️ No URLs passed. Exiting.");
-      await updateStatus(sheets, "error", startTime, "No URLs provided");
-      await browser.close();
-      return;
-    }
-
-    const headers = [
-      "Name",
-      "Tag",
-      "Image URL",
-      "Origin",
-      "Length",
-      "Diameter",
-      "Quality",
-      "Weight",
-      "Takken",
-      "Certificate",
-      "Color",
-      "Grower",
-      "Box Quantity",
-      "Stem Price",
-      "First Quantity",
-      "Available Quantity",
-      "ProductUrl",
-      "Time",
-    ];
-
-    // Clear the sheet first
-    await sheets.spreadsheets.values.clear({
-      spreadsheetId: SPREADSHEET_ID,
-      range: SHEET_NAME,
-    });
-    console.log("🧹 Cleared old data from sheet");
-
-    // Write headers as the first row
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: SHEET_NAME,
-      valueInputOption: "RAW",
-      requestBody: { values: [headers] },
-    });
-
-    let isDateSelected = false; // Flag to select date only once
-
-    for (const url of urls) {
-      console.log(`➡️ Navigating to URL: ${url}`);
-      await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
-
-      // Close popup if exists
-      try {
-        const popupClose = await page.waitForSelector("#cboxClose", {
-          visible: true,
-          timeout: 5000,
-        });
-        if (popupClose) {
-          await popupClose.click();
-          console.log("📦 Popup closed.");
+        {
+          timeout:
+            12000,
         }
-      } catch {
-        console.log("ℹ️ No popup to close.");
+      )
+
+      .then(
+        () => true
+      )
+
+      .catch(
+        () => false
+      );
+
+  // ----------------------------------------------------------
+  // FALLBACK
+  // ----------------------------------------------------------
+
+  if (!loggedIn) {
+    console.log(
+      "ℹ️ Trying Enter fallback..."
+    );
+
+    await page.focus(
+      "#password"
+    );
+
+    await page
+      .keyboard
+      .press(
+        "Enter"
+      );
+
+    loggedIn =
+      await page
+        .waitForFunction(
+          () =>
+            !window
+              .location
+              .pathname
+              .includes(
+                "/login"
+              ),
+
+          {
+            timeout:
+              30000,
+          }
+        )
+
+        .then(
+          () => true
+        )
+
+        .catch(
+          () => false
+        );
+  }
+
+  if (
+    !loggedIn ||
+    page.url().includes(
+      "/login"
+    )
+  ) {
+    const pageText =
+      await page
+        .evaluate(
+          () =>
+            document
+              .body
+              .innerText
+        )
+
+        .catch(
+          () => ""
+        );
+
+    throw new Error(
+      `Hami login failed. ${sanitize(
+        pageText
+      ).substring(
+        0,
+        200
+      )}`
+    );
+  }
+
+  console.log(
+    `✅ Logged in: ${page.url()}`
+  );
+
+  await delay(1000);
+}
+
+// ============================================================
+// OPEN ASSORTMENT URL
+// ============================================================
+
+async function openAssortment(
+  page,
+  url
+) {
+  console.log(
+    `➡️ Opening: ${url}`
+  );
+
+  await page.goto(
+    url,
+    {
+      waitUntil:
+        "domcontentloaded",
+
+      timeout:
+        60000,
+    }
+  );
+
+  await page.waitForSelector(
+    '[data-testid="selected-shipping-date"]',
+    {
+      visible: true,
+      timeout: 30000,
+    }
+  );
+
+  await delay(700);
+}
+
+// ============================================================
+// SELECT SHIPPING DATE
+// ============================================================
+
+async function ensureShippingDate(
+  page,
+  packingDate
+) {
+  const labels =
+    getShippingDateLabels(
+      packingDate
+    );
+
+  // ----------------------------------------------------------
+  // CURRENT DATE
+  // ----------------------------------------------------------
+
+  const current =
+    await page
+      .$eval(
+        '[data-testid="selected-shipping-date-value"]',
+
+        (element) =>
+          element
+            .textContent
+            .replace(
+              /\s+/g,
+              " "
+            )
+            .trim()
+      )
+
+      .catch(
+        () => ""
+      );
+
+  // Already selected
+  if (
+    current.toLowerCase() ===
+    labels.selectedText.toLowerCase()
+  ) {
+    console.log(
+      `📅 Shipping date already selected: ${current}`
+    );
+
+    return true;
+  }
+
+  console.log(
+    `📅 Selecting shipping date: ${labels.optionText}`
+  );
+
+  // ----------------------------------------------------------
+  // OPEN SHIPPING DATE PANEL
+  // ----------------------------------------------------------
+
+  await page.$eval(
+    '[data-testid="selected-shipping-date"]',
+
+    (element) =>
+      element.click()
+  );
+
+  await page.waitForSelector(
+    'button[data-testid="shipping-date-option"]',
+
+    {
+      visible: true,
+      timeout: 10000,
+    }
+  );
+
+  // ----------------------------------------------------------
+  // READ ALL DATES
+  // ----------------------------------------------------------
+
+  const options =
+    await page.$$eval(
+      'button[data-testid="shipping-date-option"]',
+
+      (buttons) =>
+        buttons.map(
+          (
+            button,
+            index
+          ) => {
+            const dateElement =
+              button.querySelector(
+                "span.date"
+              );
+
+            return {
+              index,
+
+              selected:
+                button.getAttribute(
+                  "data-selected"
+                ) ===
+                "true",
+
+              date:
+                (
+                  dateElement
+                    ?.textContent ||
+                  ""
+                )
+                  .replace(
+                    /\s+/g,
+                    " "
+                  )
+                  .trim(),
+            };
+          }
+        )
+    );
+
+  // ----------------------------------------------------------
+  // FIND REQUESTED DATE
+  // ----------------------------------------------------------
+
+  const matchingDate =
+    options.find(
+      (item) =>
+        item.date.toLowerCase() ===
+        labels.optionText.toLowerCase()
+    );
+
+  if (!matchingDate) {
+    console.log(
+      "📆 Available shipping dates:"
+    );
+
+    for (
+      const option of
+        options
+    ) {
+      console.log(
+        `   • ${option.date}`
+      );
+    }
+
+    console.log(
+      `⚠️ Date unavailable: ${labels.optionText}`
+    );
+
+    return false;
+  }
+
+  // ----------------------------------------------------------
+  // CLICK DATE
+  // ----------------------------------------------------------
+
+  if (
+    !matchingDate.selected
+  ) {
+    const buttons =
+      await page.$$(
+        'button[data-testid="shipping-date-option"]'
+      );
+
+    await buttons[
+      matchingDate.index
+    ].click();
+  }
+
+  // ----------------------------------------------------------
+  // VERIFY DATE CHANGED
+  // ----------------------------------------------------------
+
+  await page.waitForFunction(
+    (expected) => {
+      const element =
+        document.querySelector(
+          '[data-testid="selected-shipping-date-value"]'
+        );
+
+      if (!element) {
+        return false;
       }
 
-      // Select packing date only for the first URL
-      if (!isDateSelected) {
-        const hasProducts = await selectPackingDate(page, packingDate);
-        if (!hasProducts) {
-          console.log(`⚠️ No products for the first URL: ${url}`);
+      const currentText =
+        element
+          .textContent
+          .replace(
+            /\s+/g,
+            " "
+          )
+          .trim()
+          .toLowerCase();
+
+      return (
+        currentText ===
+        expected.toLowerCase()
+      );
+    },
+
+    {
+      timeout: 20000,
+    },
+
+    labels.selectedText
+  );
+
+  // Let product list refresh
+  await delay(1800);
+
+  console.log(
+    `✅ Shipping date ready: ${labels.selectedText}`
+  );
+
+  return true;
+}
+
+// ============================================================
+// SCRAPE PRODUCTS CURRENTLY MOUNTED IN DOM
+// ============================================================
+
+async function scrapeVisibleProducts(
+  page
+) {
+  const scrapeTime =
+    getUaeTimeFormatted();
+
+  return page.evaluate(
+    (time) => {
+      // ======================================================
+      // LOCAL CLEANER
+      // ======================================================
+
+      const clean =
+        (value) =>
+          String(
+            value ?? ""
+          )
+            .replace(
+              /\s+/g,
+              " "
+            )
+            .trim();
+
+      // ======================================================
+      // REMOVE MINIMUM / MINIMAAL
+      // ======================================================
+
+      const removeMinimum =
+        (value) =>
+          clean(value)
+            .replace(
+              /^minimaal\s*:?\s*/i,
+              ""
+            )
+            .replace(
+              /^minimum\s*:?\s*/i,
+              ""
+            )
+            .replace(
+              /^min\.?\s*:?\s*/i,
+              ""
+            )
+            .trim();
+
+      // ======================================================
+      // FIND FULL PRODUCT CARD
+      // ======================================================
+
+      function findCardRoot(
+        titleElement
+      ) {
+        let current =
+          titleElement;
+
+        let level = 0;
+
+        while (
+          current &&
+          current !==
+            document.body &&
+          level < 16
+        ) {
+          const hasImage =
+            current.querySelector(
+              "div.product-card--top > img"
+            );
+
+          const hasSpecifics =
+            current.querySelector(
+              "div.specifics"
+            );
+
+          if (
+            hasImage &&
+            hasSpecifics
+          ) {
+            return current;
+          }
+
+          current =
+            current.parentElement;
+
+          level++;
+        }
+
+        return null;
+      }
+
+      // ======================================================
+      // ATTRIBUTES
+      // ======================================================
+
+      function scrapeAttributes(
+        card
+      ) {
+        const attrs = {
+          Length:
+            "N/A",
+
+          Diameter:
+            "N/A",
+
+          Quality:
+            "N/A",
+
+          Weight:
+            "N/A",
+
+          NoOfBuds:
+            "N/A",
+        };
+
+        const items =
+          Array.from(
+            card.querySelectorAll(
+              "li[data-sequence]"
+            )
+          );
+
+        for (
+          const item of items
+        ) {
+          const text =
+            clean(
+              item.textContent
+            );
+
+          if (!text) {
+            continue;
+          }
+
+          const lower =
+            text.toLowerCase();
+
+          // ==================================================
+          // NO OF BUDS
+          //
+          // 5+
+          // 7+
+          // 10+
+          // ==================================================
+
+          if (
+            /^\d+\s*\+$/.test(
+              text
+            )
+          ) {
+            attrs.NoOfBuds =
+              text.replace(
+                /\s+/g,
+                ""
+              );
+
+            continue;
+          }
+
+          // ==================================================
+          // WEIGHT
+          //
+          // 55 gr
+          // 75 gr
+          // 1 kg
+          // ==================================================
+
+          if (
+            /\b(gr|gram|grams|kg)\b/i.test(
+              lower
+            )
+          ) {
+            attrs.Weight =
+              text;
+
+            continue;
+          }
+
+          // ==================================================
+          // QUALITY
+          //
+          // A1
+          // ==================================================
+
+          const hasSvg =
+            Boolean(
+              item.querySelector(
+                "svg"
+              )
+            );
+
+          if (
+            !hasSvg &&
+            /^[A-Za-z]\d+[A-Za-z0-9+\-]*$/.test(
+              text
+            )
+          ) {
+            attrs.Quality =
+              text;
+
+            continue;
+          }
+
+          // ==================================================
+          // LENGTH / DIAMETER
+          // ==================================================
+
+          if (
+            /\b(cm|mm)\b/i.test(
+              lower
+            )
+          ) {
+            const pathD =
+              item
+                .querySelector(
+                  "svg path"
+                )
+                ?.getAttribute(
+                  "d"
+                ) ||
+              "";
+
+            // ----------------------------------------------
+            // Diameter detection
+            // ----------------------------------------------
+
+            const hasMinimum =
+              /^(minimaal|minimum|min\.)/i.test(
+                text
+              );
+
+            const diameterIcon =
+              pathD.includes(
+                "M5.167 8.37"
+              ) ||
+              pathD.includes(
+                "4.667-4.667"
+              );
+
+            // ----------------------------------------------
+            // Length ruler icon
+            // ----------------------------------------------
+
+            const lengthIcon =
+              pathD.includes(
+                "M3.372 11.333"
+              ) ||
+              pathD.includes(
+                "2.167 5.205"
+              );
+
+            if (
+              hasMinimum ||
+              diameterIcon
+            ) {
+              attrs.Diameter =
+                removeMinimum(
+                  text
+                );
+
+              continue;
+            }
+
+            if (
+              lengthIcon
+            ) {
+              attrs.Length =
+                text;
+
+              continue;
+            }
+
+            // ----------------------------------------------
+            // Fallback
+            // ----------------------------------------------
+
+            if (
+              attrs.Length ===
+              "N/A"
+            ) {
+              attrs.Length =
+                text;
+            }
+
+            else if (
+              attrs.Diameter ===
+              "N/A"
+            ) {
+              attrs.Diameter =
+                removeMinimum(
+                  text
+                );
+            }
+          }
+        }
+
+        return attrs;
+      }
+
+      // ======================================================
+      // PRICE + PACKING OPTION
+      // ======================================================
+
+      function getBestOrderOption(
+        card
+      ) {
+        const rows =
+          Array.from(
+            card.querySelectorAll(
+              "div.product-order-row"
+            )
+          );
+
+        const options =
+          rows
+            .map(
+              (row) => {
+                // ------------------------------------------
+                // Packing
+                //
+                // 1 x 50
+                // 5 x 10
+                // ------------------------------------------
+
+                const packingText =
+                  clean(
+                    row
+                      .querySelector(
+                        "span.available"
+                      )
+                      ?.textContent ||
+                    ""
+                  );
+
+                const match =
+                  packingText.match(
+                    /(\d+)\s*[x×]\s*(\d+)/i
+                  );
+
+                if (!match) {
+                  return null;
+                }
+
+                const outerQuantity =
+                  Number(
+                    match[1]
+                  );
+
+                const innerQuantity =
+                  Number(
+                    match[2]
+                  );
+
+                // ------------------------------------------
+                // Price from SAME ROW
+                // ------------------------------------------
+
+                const priceText =
+                  clean(
+                    row
+                      .querySelector(
+                        'button[data-testid="quantity-with-input--order-button"]'
+                      )
+                      ?.textContent ||
+                    ""
+                  );
+
+                const normalizedPrice =
+                  priceText
+                    .replace(
+                      /€/g,
+                      ""
+                    )
+                    .replace(
+                      /\s+/g,
+                      ""
+                    )
+                    .replace(
+                      ",",
+                      "."
+                    );
+
+                const numericPrice =
+                  Number.parseFloat(
+                    normalizedPrice
+                  );
+
+                return {
+                  outerQuantity,
+
+                  innerQuantity,
+
+                  availableQuantity:
+                    `${outerQuantity} × ${innerQuantity}`,
+
+                  stemPrice:
+                    Number.isFinite(
+                      numericPrice
+                    )
+                      ? numericPrice
+                      : 0,
+                };
+              }
+            )
+
+            .filter(Boolean);
+
+        // --------------------------------------------------
+        // NO PACKING FOUND
+        // --------------------------------------------------
+
+        if (!options.length) {
+          return {
+            firstQuantity:
+              "N/A",
+
+            availableQuantity:
+              "N/A",
+
+            stemPrice:
+              0,
+          };
+        }
+
+        // ==================================================
+        // OUR RULE
+        //
+        // 1 × 50
+        // 5 × 10
+        //
+        // Select 5 × 10
+        //
+        // because 10 is smaller than 50.
+        //
+        // ==================================================
+
+        options.sort(
+          (
+            a,
+            b
+          ) => {
+            if (
+              a.innerQuantity !==
+              b.innerQuantity
+            ) {
+              return (
+                a.innerQuantity -
+                b.innerQuantity
+              );
+            }
+
+            return (
+              a.outerQuantity -
+              b.outerQuantity
+            );
+          }
+        );
+
+        const selected =
+          options[0];
+
+        return {
+          firstQuantity:
+            selected.innerQuantity,
+
+          availableQuantity:
+            selected.availableQuantity,
+
+          stemPrice:
+            selected.stemPrice,
+        };
+      }
+
+      // ======================================================
+      // FIND PRODUCT TITLES
+      // ======================================================
+
+      const titleElements =
+        Array.from(
+          document.querySelectorAll(
+            "div.title h4.title-xl-bold"
+          )
+        );
+
+      const products =
+        [];
+
+      const seenCards =
+        new Set();
+
+      for (
+        const titleElement of
+          titleElements
+      ) {
+        const card =
+          findCardRoot(
+            titleElement
+          );
+
+        if (!card) {
           continue;
         }
-        isDateSelected = true; // Mark date as selected
+
+        if (
+          seenCards.has(
+            card
+          )
+        ) {
+          continue;
+        }
+
+        seenCards.add(
+          card
+        );
+
+        // ==================================================
+        // NAME
+        // ==================================================
+
+        const name =
+          clean(
+            titleElement.getAttribute(
+              "title"
+            ) ||
+            titleElement.textContent
+          ) ||
+          "N/A";
+
+        // ==================================================
+        // TAG
+        // ==================================================
+
+        const tag =
+          clean(
+            card
+              .querySelector(
+                "div.product-card--meta span.pieces.title-m"
+              )
+              ?.textContent
+          ) ||
+          "N/A";
+
+        // ==================================================
+        // IMAGE
+        // ==================================================
+
+        const imageElement =
+          card.querySelector(
+            "div.product-card--top > img"
+          );
+
+        const imageUrl =
+          imageElement
+            ?.currentSrc ||
+          imageElement
+            ?.src ||
+          imageElement
+            ?.getAttribute(
+              "src"
+            ) ||
+          "";
+
+        // ==================================================
+        // SPECIFICS AREA
+        // ==================================================
+
+        const specifics =
+          card.querySelector(
+            "div.specifics"
+          );
+
+        // ==================================================
+        // ORIGIN
+        // ==================================================
+
+        const origin =
+          clean(
+            specifics
+              ?.querySelector(
+                "div.country"
+              )
+              ?.textContent
+          ) ||
+          "N/A";
+
+        // ==================================================
+        // COLOR
+        // ==================================================
+
+        const color =
+          clean(
+            specifics
+              ?.querySelector(
+                "span.color"
+              )
+              ?.textContent
+          ) ||
+          "N/A";
+
+        // ==================================================
+        // BOX QUANTITY
+        // ==================================================
+
+        const boxQuantity =
+          clean(
+            specifics
+              ?.querySelector(
+                "span.container"
+              )
+              ?.textContent
+          ) ||
+          "N/A";
+
+        // ==================================================
+        // GROWER
+        // ==================================================
+
+        const growerElement =
+          card.querySelector(
+            "span.grower"
+          );
+
+        const grower =
+          clean(
+            growerElement
+              ?.getAttribute(
+                "title"
+              ) ||
+            growerElement
+              ?.textContent
+          ) ||
+          "N/A";
+
+        // ==================================================
+        // ATTRIBUTE PARSER
+        // ==================================================
+
+        const attrs =
+          scrapeAttributes(
+            card
+          );
+
+        // ==================================================
+        // PACKING + PRICE
+        // ==================================================
+
+        const orderOption =
+          getBestOrderOption(
+            card
+          );
+
+        // ==================================================
+        // BUILD PRODUCT
+        // ==================================================
+
+        products.push({
+          "Name":
+            name,
+
+          "Tag":
+            tag,
+
+          "Image URL":
+            imageUrl,
+
+          "Origin":
+            origin,
+
+          "Length":
+            attrs.Length,
+
+          "Diameter":
+            attrs.Diameter,
+
+          "Quality":
+            attrs.Quality,
+
+          "Weight":
+            attrs.Weight,
+
+          "No of Buds":
+            attrs.NoOfBuds,
+
+          "Takken":
+            "N/A",
+
+          "Certificate":
+            "N/A",
+
+          "Color":
+            color,
+
+          "Grower":
+            grower,
+
+          "Box Quantity":
+            boxQuantity,
+
+          "Stem Price":
+            orderOption.stemPrice,
+
+          "First Quantity":
+            orderOption.firstQuantity,
+
+          "Available Quantity":
+            orderOption.availableQuantity,
+
+          "ProductUrl":
+            "N/A",
+
+          "Time":
+            time,
+        });
       }
 
-      const data = await scrapeProductsWithPagination(page);
-      console.log(`🧾 Writing ${data.length} products to Google Sheets...`);
-      totalProductsScraped += data.length;
+      return products;
+    },
 
-      if (data.length) {
-        await sheets.spreadsheets.values.append({
-          spreadsheetId: SPREADSHEET_ID,
-          range: SHEET_NAME,
-          valueInputOption: "RAW",
-          requestBody: { values: data },
-        });
-      } else {
-        await sheets.spreadsheets.values.append({
-          spreadsheetId: SPREADSHEET_ID,
-          range: SHEET_NAME,
-          valueInputOption: "RAW",
-          requestBody: { values: [["No products found for this URL"]] },
-        });
-      }
+    scrapeTime
+  );
+}
+
+// ============================================================
+// PRODUCT UNIQUE KEY
+// ============================================================
+
+function getProductKey(
+  product
+) {
+  return [
+    product.Name,
+    product.Grower,
+    product["Image URL"],
+    product.Origin,
+    product.Length,
+    product.Diameter,
+    product.Quality,
+    product.Weight,
+    product["No of Buds"],
+    product.Color,
+    product["Box Quantity"],
+    product["Stem Price"],
+    product["First Quantity"],
+    product["Available Quantity"],
+  ].join("|");
+}
+
+// ============================================================
+// INFINITE SCROLL
+// ============================================================
+
+async function collectAllProductsFromCurrentUrl(
+  page
+) {
+  const products =
+    new Map();
+
+  let stableBottomRounds =
+    0;
+
+  let lastCount =
+    0;
+
+  // ----------------------------------------------------------
+  // WAIT FOR FIRST PRODUCT
+  // ----------------------------------------------------------
+
+  const productFound =
+    await page
+      .waitForSelector(
+        "div.title h4.title-xl-bold",
+
+        {
+          visible: true,
+          timeout: 25000,
+        }
+      )
+
+      .then(
+        () => true
+      )
+
+      .catch(
+        () => false
+      );
+
+  if (!productFound) {
+    console.log(
+      "⚠️ No products found on this URL."
+    );
+
+    return [];
+  }
+
+  // ----------------------------------------------------------
+  // START FROM TOP
+  // ----------------------------------------------------------
+
+  await page.evaluate(
+    () =>
+      window.scrollTo(
+        0,
+        0
+      )
+  );
+
+  await delay(
+    700
+  );
+
+  console.log(
+    "🕵️ Starting infinite scroll..."
+  );
+
+  // ----------------------------------------------------------
+  // SCROLL LOOP
+  // ----------------------------------------------------------
+
+  for (
+    let round = 1;
+    round <=
+      MAX_SCROLL_ROUNDS;
+    round++
+  ) {
+    // --------------------------------------------------------
+    // COLLECT CURRENT PRODUCTS
+    // --------------------------------------------------------
+
+    const visibleProducts =
+      await scrapeVisibleProducts(
+        page
+      );
+
+    for (
+      const product of
+        visibleProducts
+    ) {
+      products.set(
+        getProductKey(
+          product
+        ),
+
+        product
+      );
     }
 
-    console.log(`🎉 All URLs processed. Total products: ${totalProductsScraped}`);
+    // --------------------------------------------------------
+    // SCROLL DOWN
+    // --------------------------------------------------------
 
-    // Update status with success
-    if (totalProductsScraped > 0) {
-      await updateStatus(sheets, "success", startTime);
+    await page.evaluate(
+      () => {
+        const root =
+          document.scrollingElement ||
+          document.documentElement;
+
+        const amount =
+          Math.max(
+            Math.floor(
+              window.innerHeight *
+                0.85
+            ),
+            650
+          );
+
+        root.scrollBy(
+          0,
+          amount
+        );
+      }
+    );
+
+    await delay(
+      900
+    );
+
+    // --------------------------------------------------------
+    // GET SCROLL POSITION
+    // --------------------------------------------------------
+
+    const state =
+      await page.evaluate(
+        () => {
+          const root =
+            document.scrollingElement ||
+            document.documentElement;
+
+          return {
+            top:
+              root.scrollTop,
+
+            max:
+              Math.max(
+                0,
+
+                root.scrollHeight -
+                  root.clientHeight
+              ),
+          };
+        }
+      );
+
+    const atBottom =
+      state.top >=
+      state.max - 20;
+
+    const currentCount =
+      products.size;
+
+    // --------------------------------------------------------
+    // CHECK IF PRODUCT COUNT STOPPED
+    // --------------------------------------------------------
+
+    if (
+      atBottom &&
+      currentCount ===
+        lastCount
+    ) {
+      stableBottomRounds++;
     } else {
-      await updateStatus(sheets, "no-products", startTime);
+      stableBottomRounds =
+        0;
     }
 
-    console.log(`🏁 Scraping completed! Runtime: ${formatRuntime(Date.now() - startTime)}`);
-  } catch (err) {
-    console.error("❌ Scraping or writing failed:", err);
+    console.log(
+      `   ↳ Scroll ${round}: ` +
+      `${currentCount} products | ` +
+      `bottom=${atBottom} | ` +
+      `stable=${stableBottomRounds}/${STABLE_BOTTOM_ROUNDS}`
+    );
 
-    // Update status with error
+    lastCount =
+      currentCount;
+
+    // --------------------------------------------------------
+    // EXTRA WAIT AT BOTTOM
+    // --------------------------------------------------------
+
+    if (atBottom) {
+      await delay(
+        1400
+      );
+
+      // Product batch may have loaded
+      const afterWaitProducts =
+        await scrapeVisibleProducts(
+          page
+        );
+
+      for (
+        const product of
+          afterWaitProducts
+      ) {
+        products.set(
+          getProductKey(
+            product
+          ),
+
+          product
+        );
+      }
+
+      if (
+        products.size >
+        currentCount
+      ) {
+        stableBottomRounds =
+          0;
+
+        lastCount =
+          products.size;
+
+        console.log(
+          `   🌷 New batch loaded → ${products.size}`
+        );
+      }
+    }
+
+    // --------------------------------------------------------
+    // STOP AFTER BOTTOM STAYS STABLE
+    // --------------------------------------------------------
+
+    if (
+      atBottom &&
+      stableBottomRounds >=
+        STABLE_BOTTOM_ROUNDS
+    ) {
+      console.log(
+        "🏁 Bottom stable. No more products."
+      );
+
+      break;
+    }
+  }
+
+  // ----------------------------------------------------------
+  // FINAL CAPTURE
+  // ----------------------------------------------------------
+
+  const finalProducts =
+    await scrapeVisibleProducts(
+      page
+    );
+
+  for (
+    const product of
+      finalProducts
+  ) {
+    products.set(
+      getProductKey(
+        product
+      ),
+
+      product
+    );
+  }
+
+  console.log(
+    `✅ Infinite scroll finished: ${products.size} products`
+  );
+
+  return Array.from(
+    products.values()
+  );
+}
+
+// ============================================================
+// MAIN
+// ============================================================
+
+(async () => {
+  const startTime =
+    Date.now();
+
+  let browser =
+    null;
+
+  let sheets =
+    null;
+
+  let totalProductsScraped =
+    0;
+
+  try {
+    // ========================================================
+    // CHECK LOGIN
+    // ========================================================
+
+    if (
+      !EMAIL ||
+      !PASSWORD
+    ) {
+      throw new Error(
+        "Missing HAMI_USERNAME or HAMI_PASSWORD."
+      );
+    }
+
+    // ========================================================
+    // CHECK DATE
+    // ========================================================
+
+    if (!PACKING_DATE) {
+      throw new Error(
+        "Missing PACKING_DATE from GitHub workflow."
+      );
+    }
+
+    // Validate
+    parsePackingDate(
+      PACKING_DATE
+    );
+
+    // ========================================================
+    // CHECK URLS
+    // ========================================================
+
+    if (!URLS.length) {
+      throw new Error(
+        "No URLs received from GitHub workflow."
+      );
+    }
+
+    console.log(
+      "========================================"
+    );
+
+    console.log(
+      "🌸 NEW OZ-HAMI SCRAPER"
+    );
+
+    console.log(
+      "========================================"
+    );
+
+    console.log(
+      `📅 Packing Date: ${PACKING_DATE}`
+    );
+
+    console.log(
+      `🔗 URLs Received: ${URLS.length}`
+    );
+
+    URLS.forEach(
+      (
+        url,
+        index
+      ) => {
+        console.log(
+          `   ${index + 1}. ${url}`
+        );
+      }
+    );
+
+    // ========================================================
+    // GOOGLE SHEETS
+    // ========================================================
+
+    sheets =
+      await getGoogleSheetClient();
+
+    await updateStatus(
+      sheets,
+      "running",
+      startTime
+    );
+
+    // ========================================================
+    // CLEAR OLD PRODUCT DATA
+    // ========================================================
+
+    await prepareOutputSheet(
+      sheets
+    );
+
+    // ========================================================
+    // LAUNCH CHROME
+    // ========================================================
+
+    browser =
+      await puppeteer.launch({
+        headless: true,
+
+        executablePath:
+          PUPPETEER_EXECUTABLE_PATH,
+
+        args: [
+          "--no-sandbox",
+
+          "--disable-setuid-sandbox",
+
+          "--disable-dev-shm-usage",
+
+          "--disable-gpu",
+
+          "--window-size=1440,1000",
+        ],
+      });
+
+    const page =
+      await browser.newPage();
+
+    page.setDefaultTimeout(
+      30000
+    );
+
+    await page.setViewport({
+      width: 1440,
+      height: 1000,
+    });
+
+    // Hide webdriver flag
+    await page
+      .evaluateOnNewDocument(
+        () => {
+          Object.defineProperty(
+            navigator,
+            "webdriver",
+            {
+              get: () =>
+                false,
+            }
+          );
+        }
+      );
+
+    // ========================================================
+    // LOGIN ONLY ONCE
+    // ========================================================
+
+    await login(
+      page
+    );
+
+    // ========================================================
+    // GLOBAL DEDUPE
+    // ========================================================
+
+    const globalSeenProducts =
+      new Set();
+
+    // ========================================================
+    // LOOP URLS SENT FROM APPS SCRIPT
+    // ========================================================
+
+    for (
+      let index = 0;
+      index < URLS.length;
+      index++
+    ) {
+      const url =
+        URLS[index];
+
+      console.log(
+        "\n========================================"
+      );
+
+      console.log(
+        `🌸 URL ${index + 1}/${URLS.length}`
+      );
+
+      console.log(
+        `➡️ ${url}`
+      );
+
+      console.log(
+        "========================================"
+      );
+
+      // ======================================================
+      // OPEN CATEGORY
+      // ======================================================
+
+      await openAssortment(
+        page,
+        url
+      );
+
+      // ======================================================
+      // SELECT DATE FROM _config!C9
+      //
+      // Apps Script already sends this to GitHub
+      // as PACKING_DATE.
+      // ======================================================
+
+      const dateAvailable =
+        await ensureShippingDate(
+          page,
+          PACKING_DATE
+        );
+
+      // If this URL has no requested shipping date,
+      // skip it instead of stopping everything.
+
+      if (!dateAvailable) {
+        console.log(
+          `⚠️ Skipping URL because ${PACKING_DATE} is unavailable.`
+        );
+
+        continue;
+      }
+
+      // ======================================================
+      // INFINITE SCROLL + SCRAPE
+      // ======================================================
+
+      const products =
+        await collectAllProductsFromCurrentUrl(
+          page
+        );
+
+      // ======================================================
+      // DEDUPE
+      // ======================================================
+
+      const newProducts =
+        [];
+
+      for (
+        const product of
+          products
+      ) {
+        const key =
+          getProductKey(
+            product
+          );
+
+        if (
+          globalSeenProducts.has(
+            key
+          )
+        ) {
+          continue;
+        }
+
+        globalSeenProducts.add(
+          key
+        );
+
+        newProducts.push(
+          product
+        );
+      }
+
+      // ======================================================
+      // WRITE THIS URL
+      // ======================================================
+
+      if (
+        newProducts.length >
+        0
+      ) {
+        await appendProductsToSheet(
+          sheets,
+          newProducts
+        );
+
+        totalProductsScraped +=
+          newProducts.length;
+      }
+
+      console.log(
+        `🌷 Products found: ${products.length}`
+      );
+
+      console.log(
+        `📝 New rows written: ${newProducts.length}`
+      );
+
+      console.log(
+        `📊 Total rows: ${totalProductsScraped}`
+      );
+
+      // ======================================================
+      // RESET SCROLL BEFORE NEXT URL
+      // ======================================================
+
+      await page
+        .evaluate(
+          () =>
+            window.scrollTo(
+              0,
+              0
+            )
+        )
+
+        .catch(
+          () => {}
+        );
+
+      await delay(
+        600
+      );
+    }
+
+    // ========================================================
+    // FINAL STATUS
+    // ========================================================
+
+    if (
+      totalProductsScraped >
+      0
+    ) {
+      await updateStatus(
+        sheets,
+        "success",
+        startTime
+      );
+    } else {
+      await updateStatus(
+        sheets,
+        "no-products",
+        startTime
+      );
+    }
+
+    console.log(
+      "\n========================================"
+    );
+
+    console.log(
+      "🎉 HAMI SCRAPING COMPLETE"
+    );
+
+    console.log(
+      `🌷 Total products: ${totalProductsScraped}`
+    );
+
+    console.log(
+      `🏁 Runtime: ${formatRuntime(
+        Date.now() -
+          startTime
+      )}`
+    );
+
+    console.log(
+      "========================================"
+    );
+  }
+
+  catch (error) {
+    console.error(
+      "\n❌ SCRAPER FAILED:"
+    );
+
+    console.error(
+      error
+    );
+
     if (sheets) {
       try {
-        await updateStatus(sheets, "error", startTime, err.message?.substring(0, 50));
-      } catch (updateErr) {
-        console.error("❌ Failed to update error status:", updateErr);
+        await updateStatus(
+          sheets,
+          "error",
+          startTime,
+
+          String(
+            error.message ||
+              error
+          ).substring(
+            0,
+            100
+          )
+        );
+      }
+
+      catch (
+        statusError
+      ) {
+        console.error(
+          "❌ Failed updating status:",
+          statusError.message
+        );
       }
     }
 
-    process.exitCode = 1;
-  } finally {
+    process.exitCode =
+      1;
+  }
+
+  finally {
     if (browser) {
-      await browser.close();
-      console.log("🔒 Browser closed.");
+      await browser
+        .close()
+        .catch(
+          () => {}
+        );
+
+      console.log(
+        "🔒 Browser closed."
+      );
     }
   }
 })();
