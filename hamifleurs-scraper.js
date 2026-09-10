@@ -512,10 +512,6 @@ async function login(page) {
   const loginSelector =
     'button[type="submit"][aria-label="Login"]';
 
-  // =========================================================
-  // WAIT FOR LOGIN FORM
-  // =========================================================
-
   await page.waitForSelector(usernameSelector, {
     visible: true,
     timeout: 30000,
@@ -534,158 +530,57 @@ async function login(page) {
   console.log("✅ Login form loaded");
 
   // =========================================================
-  // INPUT FILLER
-  // Compatible with older Puppeteer
+  // CREATE CHROME DEVTOOLS SESSION
+  // =========================================================
+
+  const client =
+    await page.target().createCDPSession();
+
+  // =========================================================
+  // REAL TEXT INPUT
   // =========================================================
 
   async function fillInput(selector, value) {
-    if (!value) {
+    const stringValue = String(value || "");
+
+    if (!stringValue) {
       throw new Error(
         `Missing value for ${selector}`
       );
     }
 
-    const stringValue = String(value);
-
-    // Focus input
+    // Focus
     await page.focus(selector);
 
-    // -------------------------------------------------------
-    // CLEAR INPUT USING NATIVE SETTER
-    // -------------------------------------------------------
+    // Clear existing content
+    await page.keyboard.down("Control");
+    await page.keyboard.press("A");
+    await page.keyboard.up("Control");
+    await page.keyboard.press("Backspace");
 
-    await page.$eval(
-      selector,
-      (element) => {
-        const setter =
-          Object.getOwnPropertyDescriptor(
-            HTMLInputElement.prototype,
-            "value"
-          )?.set;
+    await delay(150);
 
-        if (setter) {
-          setter.call(element, "");
-        } else {
-          element.value = "";
-        }
-
-        element.dispatchEvent(
-          new Event("input", {
-            bubbles: true,
-          })
-        );
-
-        element.dispatchEvent(
-          new Event("change", {
-            bubbles: true,
-          })
-        );
-      }
-    );
-
-    // -------------------------------------------------------
-    // TYPE LIKE REAL KEYBOARD
-    //
-    // keyboard.type works with older Puppeteer
-    // -------------------------------------------------------
-
-    await page.focus(selector);
-
-    await page.keyboard.type(
-      stringValue,
+    // Type text through Chrome itself
+    await client.send(
+      "Input.insertText",
       {
-        delay: 50,
+        text: stringValue,
       }
     );
 
-    await delay(500);
+    await delay(350);
 
-    let currentLength =
-      await page.$eval(
-        selector,
-        (element) =>
-          element.value?.length || 0
-      );
-
-    console.log(
-      `📝 ${selector} after keyboard.type: ${currentLength} chars`
+    return await page.$eval(
+      selector,
+      (el) => el.value?.length || 0
     );
-
-    // =======================================================
-    // FALLBACK
-    // =======================================================
-
-    if (currentLength === 0) {
-      console.log(
-        `⚠️ ${selector} keyboard.type failed. Trying native setter...`
-      );
-
-      await page.$eval(
-        selector,
-        (element, newValue) => {
-          element.focus();
-
-          const setter =
-            Object.getOwnPropertyDescriptor(
-              HTMLInputElement.prototype,
-              "value"
-            )?.set;
-
-          if (setter) {
-            setter.call(
-              element,
-              newValue
-            );
-          } else {
-            element.value =
-              newValue;
-          }
-
-          // Vue/Nuxt input update
-          element.dispatchEvent(
-            new Event("input", {
-              bubbles: true,
-            })
-          );
-
-          element.dispatchEvent(
-            new Event("change", {
-              bubbles: true,
-            })
-          );
-
-          element.dispatchEvent(
-            new Event("blur", {
-              bubbles: true,
-            })
-          );
-        },
-
-        stringValue
-      );
-
-      await delay(500);
-
-      currentLength =
-        await page.$eval(
-          selector,
-          (element) =>
-            element.value?.length || 0
-        );
-
-      console.log(
-        `📝 ${selector} after native setter: ${currentLength} chars`
-      );
-    }
-
-    return currentLength;
   }
 
   // =========================================================
-  // USERNAME
+  // FILL BOTH FIELDS
   // =========================================================
 
-  const usernameLength =
+  let usernameLength =
     await fillInput(
       usernameSelector,
       EMAIL
@@ -695,11 +590,7 @@ async function login(page) {
     `👤 Username chars: ${usernameLength}`
   );
 
-  // =========================================================
-  // PASSWORD
-  // =========================================================
-
-  const passwordLength =
+  let passwordLength =
     await fillInput(
       passwordSelector,
       PASSWORD
@@ -710,69 +601,123 @@ async function login(page) {
   );
 
   // =========================================================
-  // FINAL CHECK
+  // VERIFY BOTH AFTER PASSWORD IS ENTERED
   // =========================================================
 
-  const inputState =
-    await page.evaluate(() => {
-      const username =
-        document.querySelector(
-          "#username"
-        );
+  let state =
+    await page.evaluate(() => ({
+      usernameLength:
+        document.querySelector("#username")
+          ?.value?.length || 0,
 
-      const password =
-        document.querySelector(
-          "#password"
-        );
+      passwordLength:
+        document.querySelector("#password")
+          ?.value?.length || 0,
+    }));
 
-      const button =
-        document.querySelector(
-          'button[type="submit"][aria-label="Login"]'
-        );
+  console.log(
+    `👤 Final username chars: ${state.usernameLength}`
+  );
 
-      return {
+  console.log(
+    `🔑 Final password chars: ${state.passwordLength}`
+  );
+
+  // =========================================================
+  // IF VUE RENDER CLEARED ONE FIELD, REFILL IT
+  // =========================================================
+
+  for (
+    let attempt = 1;
+    attempt <= 3;
+    attempt++
+  ) {
+    if (
+      state.usernameLength > 0 &&
+      state.passwordLength > 0
+    ) {
+      break;
+    }
+
+    console.log(
+      `🔄 Stabilizing login fields - attempt ${attempt}`
+    );
+
+    if (
+      state.usernameLength === 0
+    ) {
+      usernameLength =
+        await fillInput(
+          usernameSelector,
+          EMAIL
+        );
+    }
+
+    if (
+      state.passwordLength === 0
+    ) {
+      passwordLength =
+        await fillInput(
+          passwordSelector,
+          PASSWORD
+        );
+    }
+
+    await delay(400);
+
+    state =
+      await page.evaluate(() => ({
         usernameLength:
-          username?.value?.length || 0,
+          document.querySelector(
+            "#username"
+          )?.value?.length || 0,
 
         passwordLength:
-          password?.value?.length || 0,
+          document.querySelector(
+            "#password"
+          )?.value?.length || 0,
+      }));
 
-        buttonDisabled:
-          Boolean(button?.disabled),
-      };
-    });
+    console.log(
+      `   👤 Username: ${state.usernameLength}`
+    );
 
-  console.log(
-    `👤 Final username chars: ${inputState.usernameLength}`
-  );
-
-  console.log(
-    `🔑 Final password chars: ${inputState.passwordLength}`
-  );
-
-  console.log(
-    `🔘 Login disabled: ${inputState.buttonDisabled}`
-  );
-
-  if (
-    inputState.usernameLength === 0 ||
-    inputState.passwordLength === 0
-  ) {
-    throw new Error(
-      "Username/password could not be filled into OZ-Hami login form."
+    console.log(
+      `   🔑 Password: ${state.passwordLength}`
     );
   }
+
+  // =========================================================
+  // FINAL VALIDATION
+  // =========================================================
+
+  if (
+    state.usernameLength === 0 ||
+    state.passwordLength === 0
+  ) {
+    throw new Error(
+      "Could not keep both OZ-Hami login fields populated."
+    );
+  }
+
+  console.log(
+    "✅ Both login fields ready"
+  );
 
   // =========================================================
   // CLICK LOGIN
   // =========================================================
 
-  console.log("➡️ Clicking Login...");
+  console.log(
+    "➡️ Clicking Login..."
+  );
 
-  await page.click(loginSelector);
+  await page.click(
+    loginSelector
+  );
 
   // =========================================================
-  // WAIT FOR LOGIN REDIRECT
+  // WAIT FOR SUCCESS
   // =========================================================
 
   let loggedIn =
@@ -783,7 +728,7 @@ async function login(page) {
             "/login"
           ),
         {
-          timeout: 20000,
+          timeout: 25000,
         }
       )
       .then(() => true)
@@ -795,7 +740,7 @@ async function login(page) {
 
   if (!loggedIn) {
     console.log(
-      "ℹ️ No redirect yet. Trying Enter fallback..."
+      "ℹ️ No redirect yet. Trying Enter..."
     );
 
     await page.focus(
@@ -825,27 +770,22 @@ async function login(page) {
   // FAILED
   // =========================================================
 
-  if (
-    !loggedIn ||
-    page.url().includes("/login")
-  ) {
+  if (!loggedIn) {
     const diagnostic =
       await page.evaluate(() => {
-        const bodyText =
+        const body =
           document.body?.innerText || "";
 
-        return bodyText
+        return body
           .split(/\n+/)
-          .map((text) =>
-            text.trim()
-          )
+          .map((x) => x.trim())
           .filter(Boolean)
-          .filter((text) =>
-            /required|invalid|incorrect|wrong|error|failed|username|password/i.test(
-              text
+          .filter((x) =>
+            /required|invalid|incorrect|wrong|error|failed/i.test(
+              x
             )
           )
-          .slice(0, 15);
+          .slice(0, 10);
       });
 
     console.log(
@@ -853,9 +793,9 @@ async function login(page) {
     );
 
     diagnostic.forEach(
-      (text) =>
+      (line) =>
         console.log(
-          `   ${text}`
+          `   ${line}`
         )
     );
 
@@ -877,6 +817,9 @@ async function login(page) {
   console.log(
     `🌐 Current URL: ${page.url()}`
   );
+
+  await client.detach()
+    .catch(() => {});
 }
 // ============================================================
 // OPEN ASSORTMENT
