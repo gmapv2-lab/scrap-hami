@@ -1134,200 +1134,122 @@ async function scrapeVisibleProducts(
         card
       ) {
         const attrs = {
-          Length:
-            "N/A",
-
-          Diameter:
-            "N/A",
-
-          Quality:
-            "N/A",
-
-          Weight:
-            "N/A",
-
-          NoOfBuds:
-            "N/A",
+          Length: "N/A",
+          Diameter: "N/A",
+          Quality: "N/A",
+          Weight: "N/A",
+          NoOfBuds: "N/A",
         };
 
-        const items =
-          Array.from(
-            card.querySelectorAll(
-              "li[data-sequence]"
-            )
-          );
+        // Scope only to the characteristic list for this product card.
+        const items = Array.from(
+          card.querySelectorAll(
+            "ul.characteristics > li[data-sequence]"
+          )
+        );
 
-        for (
-          const item of items
-        ) {
-          const text =
-            clean(
-              item.textContent
-            );
+        for (const item of items) {
+          let text = clean(item.textContent);
 
           if (!text) {
             continue;
           }
 
-          const lower =
-            text.toLowerCase();
+          const sequence =
+            item.getAttribute("data-sequence");
 
           // ==================================================
-          // NO OF BUDS
+          // SEQUENCE 1 = LENGTH
           //
-          // 5+
-          // 7+
-          // 10+
+          // Example:
+          // 7 cm
+          // 70 cm
           // ==================================================
-
-          if (
-            /^\d+\s*\+$/.test(
-              text
-            )
-          ) {
-            attrs.NoOfBuds =
-              text.replace(
-                /\s+/g,
-                ""
-              );
-
+          if (sequence === "1") {
+            attrs.Length = text;
             continue;
           }
 
           // ==================================================
-          // WEIGHT
+          // SEQUENCE 2 = VARIABLE ATTRIBUTE
           //
-          // 55 gr
-          // 75 gr
-          // 1 kg
+          // We DO NOT assume sequence 2 always means one field.
+          // We classify it using the actual value.
           // ==================================================
+          if (sequence === "2") {
+            // ----------------------------------------------
+            // NO OF BUDS
+            //
+            // 5+
+            // 7+
+            // 10+
+            // ----------------------------------------------
+            if (/^\d+\s*\+$/.test(text)) {
+              attrs.NoOfBuds =
+                text.replace(/\s+/g, "");
 
-          if (
-            /\b(gr|gram|grams|kg)\b/i.test(
-              lower
-            )
-          ) {
-            attrs.Weight =
-              text;
+              continue;
+            }
 
-            continue;
+            // ----------------------------------------------
+            // WEIGHT
+            //
+            // 55 gr
+            // 75 gr
+            // 1 kg
+            // ----------------------------------------------
+            if (
+              /\b(gr|gram|grams|kg)\b/i.test(text)
+            ) {
+              attrs.Weight = text;
+              continue;
+            }
+
+            // ----------------------------------------------
+            // DIAMETER
+            //
+            // Minimaal 7 cm
+            // Minimum 15 cm
+            // Min. 10 cm
+            // 7 cm
+            //
+            // Store only:
+            // 7 cm
+            // 15 cm
+            // 10 cm
+            // ----------------------------------------------
+            if (
+              /\b(cm|mm)\b/i.test(text)
+            ) {
+              text = text
+                .replace(
+                  /^minimaal\s*:?\s*/i,
+                  ""
+                )
+                .replace(
+                  /^minimum\s*:?\s*/i,
+                  ""
+                )
+                .replace(
+                  /^min\.?\s*:?\s*/i,
+                  ""
+                )
+                .trim();
+
+              attrs.Diameter = text;
+              continue;
+            }
           }
 
           // ==================================================
-          // QUALITY
+          // SEQUENCE 3 = QUALITY
           //
+          // Example:
           // A1
           // ==================================================
-
-          const hasSvg =
-            Boolean(
-              item.querySelector(
-                "svg"
-              )
-            );
-
-          if (
-            !hasSvg &&
-            /^[A-Za-z]\d+[A-Za-z0-9+\-]*$/.test(
-              text
-            )
-          ) {
-            attrs.Quality =
-              text;
-
+          if (sequence === "3") {
+            attrs.Quality = text;
             continue;
-          }
-
-          // ==================================================
-          // LENGTH / DIAMETER
-          // ==================================================
-
-          if (
-            /\b(cm|mm)\b/i.test(
-              lower
-            )
-          ) {
-            const pathD =
-              item
-                .querySelector(
-                  "svg path"
-                )
-                ?.getAttribute(
-                  "d"
-                ) ||
-              "";
-
-            // ----------------------------------------------
-            // Diameter detection
-            // ----------------------------------------------
-
-            const hasMinimum =
-              /^(minimaal|minimum|min\.)/i.test(
-                text
-              );
-
-            const diameterIcon =
-              pathD.includes(
-                "M5.167 8.37"
-              ) ||
-              pathD.includes(
-                "4.667-4.667"
-              );
-
-            // ----------------------------------------------
-            // Length ruler icon
-            // ----------------------------------------------
-
-            const lengthIcon =
-              pathD.includes(
-                "M3.372 11.333"
-              ) ||
-              pathD.includes(
-                "2.167 5.205"
-              );
-
-            if (
-              hasMinimum ||
-              diameterIcon
-            ) {
-              attrs.Diameter =
-                removeMinimum(
-                  text
-                );
-
-              continue;
-            }
-
-            if (
-              lengthIcon
-            ) {
-              attrs.Length =
-                text;
-
-              continue;
-            }
-
-            // ----------------------------------------------
-            // Fallback
-            // ----------------------------------------------
-
-            if (
-              attrs.Length ===
-              "N/A"
-            ) {
-              attrs.Length =
-                text;
-            }
-
-            else if (
-              attrs.Diameter ===
-              "N/A"
-            ) {
-              attrs.Diameter =
-                removeMinimum(
-                  text
-                );
-            }
           }
         }
 
