@@ -1175,174 +1175,146 @@ async function scrapeVisibleProducts(
       // PRODUCT ATTRIBUTES
       // ======================================================
 
-      function scrapeAttributes(
-        card
+function scrapeAttributes(card) {
+  const attrs = {
+    Length: "N/A",
+    Diameter: "N/A",
+    Quality: "N/A",
+    Weight: "N/A",
+    NoOfBuds: "N/A",
+  };
+
+  const items = Array.from(
+    card.querySelectorAll("li[data-sequence]")
+  );
+
+  for (const item of items) {
+    let text = String(item.textContent || "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!text) {
+      continue;
+    }
+
+    const sequence =
+      item.getAttribute("data-sequence");
+
+    // ==========================================
+    // NO OF BUDS
+    // 5+
+    // 7+
+    // ==========================================
+
+    if (/^\d+\s*\+$/.test(text)) {
+      attrs.NoOfBuds =
+        text.replace(/\s+/g, "");
+
+      continue;
+    }
+
+    // ==========================================
+    // WEIGHT
+    // 55 gr
+    // 75 gr
+    // 1 kg
+    // ==========================================
+
+    if (
+      /\b(gr|gram|grams|kg)\b/i.test(text)
+    ) {
+      attrs.Weight = text;
+      continue;
+    }
+
+    // ==========================================
+    // DIAMETER
+    //
+    // IMPORTANT:
+    // If text contains Minimaal / Minimum / Min.
+    // it is Diameter regardless of sequence.
+    //
+    // Minimaal 9 cm -> 9 cm
+    // ==========================================
+
+    if (
+      /^(minimaal|minimum|min\.)\s*:?\s*/i.test(
+        text
+      )
+    ) {
+      const cleanedDiameter = text
+        .replace(
+          /^minimaal\s*:?\s*/i,
+          ""
+        )
+        .replace(
+          /^minimum\s*:?\s*/i,
+          ""
+        )
+        .replace(
+          /^min\.?\s*:?\s*/i,
+          ""
+        )
+        .trim();
+
+      if (
+        /\b(cm|mm)\b/i.test(
+          cleanedDiameter
+        )
       ) {
-        const attrs = {
-          Length:
-            "N/A",
+        attrs.Diameter =
+          cleanedDiameter;
 
-          Diameter:
-            "N/A",
-
-          Quality:
-            "N/A",
-
-          Weight:
-            "N/A",
-
-          NoOfBuds:
-            "N/A",
-        };
-
-        const items =
-          Array.from(
-            card.querySelectorAll(
-              "ul.characteristics > li[data-sequence]"
-            )
-          );
-
-        for (
-          const item of items
-        ) {
-          let text =
-            cleanText(
-              item.textContent
-            );
-
-          if (!text) {
-            continue;
-          }
-
-          const sequence =
-            item.getAttribute(
-              "data-sequence"
-            );
-
-          // ==================================================
-          // LENGTH
-          //
-          // sequence 1
-          //
-          // Example:
-          // 70 cm
-          // ==================================================
-
-          if (
-            sequence === "1"
-          ) {
-            attrs.Length =
-              text;
-
-            continue;
-          }
-
-          // ==================================================
-          // VARIABLE SECOND ATTRIBUTE
-          // ==================================================
-
-          if (
-            sequence === "2"
-          ) {
-            // ----------------------------------------------
-            // NO OF BUDS
-            //
-            // 5+
-            // 7+
-            // 10+
-            // ----------------------------------------------
-
-            if (
-              /^\d+\s*\+$/.test(
-                text
-              )
-            ) {
-              attrs.NoOfBuds =
-                text.replace(
-                  /\s+/g,
-                  ""
-                );
-
-              continue;
-            }
-
-            // ----------------------------------------------
-            // WEIGHT
-            //
-            // 55 gr
-            // 75 gr
-            // 1 kg
-            // ----------------------------------------------
-
-            if (
-              /\b(gr|gram|grams|kg)\b/i.test(
-                text
-              )
-            ) {
-              attrs.Weight =
-                text;
-
-              continue;
-            }
-
-            // ----------------------------------------------
-            // DIAMETER
-            //
-            // Minimaal 7 cm
-            // Minimum 15 cm
-            // Min. 10 cm
-            // ----------------------------------------------
-
-            if (
-              /\b(cm|mm)\b/i.test(
-                text
-              )
-            ) {
-              text =
-                text
-                  .replace(
-                    /^minimaal\s*:?\s*/i,
-                    ""
-                  )
-
-                  .replace(
-                    /^minimum\s*:?\s*/i,
-                    ""
-                  )
-
-                  .replace(
-                    /^min\.?\s*:?\s*/i,
-                    ""
-                  )
-
-                  .trim();
-
-              attrs.Diameter =
-                text;
-
-              continue;
-            }
-          }
-
-          // ==================================================
-          // QUALITY
-          //
-          // sequence 3
-          //
-          // Example:
-          // A1
-          // ==================================================
-
-          if (
-            sequence === "3"
-          ) {
-            attrs.Quality =
-              text;
-          }
-        }
-
-        return attrs;
+        continue;
       }
+    }
+
+    // ==========================================
+    // LENGTH
+    //
+    // sequence 1 + cm/mm
+    // ==========================================
+
+    if (
+      sequence === "1" &&
+      /\b(cm|mm)\b/i.test(text)
+    ) {
+      attrs.Length = text;
+      continue;
+    }
+
+    // ==========================================
+    // DIAMETER FALLBACK
+    //
+    // sequence 2 + cm/mm
+    //
+    // Example:
+    // 9 cm
+    // ==========================================
+
+    if (
+      sequence === "2" &&
+      /\b(cm|mm)\b/i.test(text)
+    ) {
+      attrs.Diameter = text;
+      continue;
+    }
+
+    // ==========================================
+    // QUALITY
+    //
+    // sequence 3
+    // A1
+    // ==========================================
+
+    if (sequence === "3") {
+      attrs.Quality = text;
+      continue;
+    }
+  }
+
+  return attrs;
+}
 
       // ======================================================
       // PACKING / PRICE
