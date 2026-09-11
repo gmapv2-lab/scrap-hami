@@ -1074,190 +1074,182 @@ async function scrapeVisibleProducts(
       // ======================================================
 
       function findCardRoot(titleElement) {
-  let current = titleElement;
-  let fallback = null;
-  let level = 0;
+        let current = titleElement;
+        let fallback = null;
+        let level = 0;
 
-  while (
-    current &&
-    current !== document.body &&
-    level < 20
-  ) {
-    const hasImage =
-      current.querySelector(
-        "div.product-card--top > img"
-      );
+        while (
+          current &&
+          current !== document.body &&
+          level < 20
+        ) {
+          const hasImage =
+            current.querySelector(
+              "div.product-card--top > img"
+            );
 
-    const hasSpecifics =
-      current.querySelector(
-        "div.specifics"
-      );
+          const hasSpecifics =
+            current.querySelector(
+              "div.specifics"
+            );
 
-    const hasCharacteristics =
-      current.querySelector(
-        "ul.characteristics"
-      );
+          const hasCharacteristics =
+            current.querySelector(
+              "ul.characteristics"
+            );
 
-    const hasOrderOptions =
-      current.querySelector(
-        "div.product-order-row"
-      );
+          const hasOrderOptions =
+            current.querySelector(
+              "div.product-order-row"
+            );
 
-    // Keep a fallback for products that genuinely
-    // do not have characteristics/order rows.
-    if (
-      hasImage &&
-      hasSpecifics
-    ) {
-      fallback = current;
-    }
+          // Keep a fallback for products that genuinely
+          // do not have characteristics/order rows.
+          if (
+            hasImage &&
+            hasSpecifics
+          ) {
+            fallback = current;
+          }
 
-    // Prefer the full product card containing
-    // image + specifics + characteristics + order options.
-    if (
-      hasImage &&
-      hasSpecifics &&
-      hasCharacteristics &&
-      hasOrderOptions
-    ) {
-      return current;
-    }
+          // Prefer the full product card containing
+          // image + specifics + characteristics + order options.
+          if (
+            hasImage &&
+            hasSpecifics &&
+            hasCharacteristics &&
+            hasOrderOptions
+          ) {
+            return current;
+          }
 
-    current = current.parentElement;
-    level++;
-  }
+          current = current.parentElement;
+          level++;
+        }
 
-  return fallback;
-}
+        return fallback;
+      }
 
       // ======================================================
       // PRODUCT ATTRIBUTES
       // ======================================================
+      //
+      // Rule (per site behaviour):
+      //   data-sequence="1"  -> always Length (ends in cm/mm)
+      //   data-sequence="3"  -> always Quality
+      //   everything else    -> Diameter / Weight / No of Buds,
+      //                         disambiguated by content:
+      //                           "5+"        -> No of Buds
+      //                           "55 gr/kg"  -> Weight
+      //                           "Minimaal.. cm/mm" -> Diameter
+      //
+      // Scoped to the FIRST ul.characteristics found inside the
+      // card (and its direct <li> children only) so that cards
+      // with more than one characteristics block, or stray
+      // matches elsewhere in the DOM, can't bleed values into
+      // each other.
+      // ======================================================
 
-function scrapeAttributes(card) {
-  const attrs = {
-    Length: "N/A",
-    Diameter: "N/A",
-    Quality: "N/A",
-    Weight: "N/A",
-    NoOfBuds: "N/A",
-  };
+      function scrapeAttributes(card) {
+        const attrs = {
+          Length: "N/A",
+          Diameter: "N/A",
+          Quality: "N/A",
+          Weight: "N/A",
+          NoOfBuds: "N/A",
+        };
 
-  // ======================================================
-  // LENGTH — sequence 1
-  // ======================================================
+        const charList =
+          card.querySelector(
+            "ul.characteristics"
+          );
 
-  const lengthItems = Array.from(
-    card.querySelectorAll(
-      'ul.characteristics li[data-sequence="1"]'
-    )
-  );
+        if (!charList) {
+          return attrs;
+        }
 
-  for (const item of lengthItems) {
-    const text = String(item.textContent || "")
-      .replace(/\s+/g, " ")
-      .trim();
+        const items = Array.from(
+          charList.querySelectorAll(
+            ":scope > li"
+          )
+        );
 
-    if (/\b(cm|mm)\b/i.test(text)) {
-      attrs.Length = text;
-      break;
-    }
-  }
+        for (const item of items) {
+          const sequence =
+            item.getAttribute(
+              "data-sequence"
+            );
 
-  // ======================================================
-  // SEQUENCE 2
-  // Can be Diameter / Weight / No of Buds
-  // ======================================================
+          let text = cleanText(
+            item.textContent
+          );
 
-  const secondItems = Array.from(
-    card.querySelectorAll(
-      'ul.characteristics li[data-sequence="2"]'
-    )
-  );
+          if (!text) continue;
 
-  for (const item of secondItems) {
-    let text = String(item.textContent || "")
-      .replace(/\s+/g, " ")
-      .trim();
+          // --------------------------------------------
+          // SEQUENCE 1 — always Length
+          // --------------------------------------------
+          if (sequence === "1") {
+            if (/\b(cm|mm)\b/i.test(text)) {
+              attrs.Length = text;
+            }
+            continue;
+          }
 
-    if (!text) continue;
+          // --------------------------------------------
+          // SEQUENCE 3 — always Quality
+          // --------------------------------------------
+          if (sequence === "3") {
+            attrs.Quality = text;
+            continue;
+          }
 
-    // ----------------------------
-    // No of Buds
-    // 5+
-    // ----------------------------
+          // --------------------------------------------
+          // ANY OTHER SEQUENCE (typically "2") —
+          // Diameter / Weight / No of Buds, by content
+          // --------------------------------------------
 
-    if (/^\d+\s*\+$/.test(text)) {
-      attrs.NoOfBuds =
-        text.replace(/\s+/g, "");
+          // No of Buds -> "5+"
+          if (/^\d+\s*\+$/.test(text)) {
+            attrs.NoOfBuds =
+              text.replace(/\s+/g, "");
+            continue;
+          }
 
-      continue;
-    }
+          // Weight -> "55 gr" / "1.2 kg"
+          if (
+            /\b(gr|gram|grams|kg)\b/i.test(
+              text
+            )
+          ) {
+            attrs.Weight = text;
+            continue;
+          }
 
-    // ----------------------------
-    // Weight
-    // 55 gr
-    // ----------------------------
+          // Diameter -> "Minimaal 15 cm" / "Minimum 15 cm" / "Min. 15 cm"
+          if (/\b(cm|mm)\b/i.test(text)) {
+            text = text
+              .replace(
+                /^minimaal\s*:?\s*/i,
+                ""
+              )
+              .replace(
+                /^minimum\s*:?\s*/i,
+                ""
+              )
+              .replace(
+                /^min\.?\s*:?\s*/i,
+                ""
+              )
+              .trim();
 
-    if (
-      /\b(gr|gram|grams|kg)\b/i.test(text)
-    ) {
-      attrs.Weight = text;
-      continue;
-    }
+            attrs.Diameter = text;
+            continue;
+          }
+        }
 
-    // ----------------------------
-    // Diameter
-    //
-    // Minimaal 15 cm
-    // -> 15 cm
-    // ----------------------------
-
-    if (/\b(cm|mm)\b/i.test(text)) {
-      text = text
-        .replace(
-          /^minimaal\s*:?\s*/i,
-          ""
-        )
-        .replace(
-          /^minimum\s*:?\s*/i,
-          ""
-        )
-        .replace(
-          /^min\.?\s*:?\s*/i,
-          ""
-        )
-        .trim();
-
-      attrs.Diameter = text;
-
-      continue;
-    }
-  }
-
-  // ======================================================
-  // QUALITY — sequence 3
-  // ======================================================
-
-  const qualityItem =
-    card.querySelector(
-      'ul.characteristics li[data-sequence="3"]'
-    );
-
-  if (qualityItem) {
-    const text = String(
-      qualityItem.textContent || ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-    if (text) {
-      attrs.Quality = text;
-    }
-  }
-
-  return attrs;
-}
+        return attrs;
+      }
 
       // ======================================================
       // PACKING / PRICE
@@ -1601,6 +1593,32 @@ function scrapeAttributes(card) {
           getBestOrderOption(
             card
           );
+
+        // ==================================================
+        // DEBUG — log cards where nothing matched, so
+        // unexpected markup shapes are visible in the
+        // GitHub Actions log instead of silently becoming
+        // "N/A" rows.
+        // ==================================================
+
+        if (
+          attrs.Length === "N/A" &&
+          attrs.Diameter === "N/A" &&
+          attrs.Weight === "N/A" &&
+          attrs.NoOfBuds === "N/A"
+        ) {
+          const charList =
+            card.querySelector(
+              "ul.characteristics"
+            );
+
+          console.log(
+            `⚠️ No attrs matched for "${name}". Raw list HTML: ` +
+              (charList
+                ? charList.outerHTML.slice(0, 400)
+                : "no ul.characteristics found")
+          );
+        }
 
         // ==================================================
         // RESULT
