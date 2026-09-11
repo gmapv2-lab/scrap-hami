@@ -18,7 +18,7 @@ const LOGIN_URL =
 
 const SHEET_NAME =
   process.env.SHEET_NAME ||
-  "Hami-Products";
+  "Hami v2";
 
 const CONFIG_SHEET = "_config";
 const STATUS_CELL = "F9";
