@@ -1143,32 +1143,49 @@ function scrapeAttributes(card) {
     NoOfBuds: "N/A",
   };
 
-  const items = Array.from(
+  // ======================================================
+  // LENGTH — sequence 1
+  // ======================================================
+
+  const lengthItems = Array.from(
     card.querySelectorAll(
-      "ul.characteristics li[data-sequence]"
+      'ul.characteristics li[data-sequence="1"]'
     )
   );
 
-  for (const item of items) {
+  for (const item of lengthItems) {
+    const text = String(item.textContent || "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (/\b(cm|mm)\b/i.test(text)) {
+      attrs.Length = text;
+      break;
+    }
+  }
+
+  // ======================================================
+  // SEQUENCE 2
+  // Can be Diameter / Weight / No of Buds
+  // ======================================================
+
+  const secondItems = Array.from(
+    card.querySelectorAll(
+      'ul.characteristics li[data-sequence="2"]'
+    )
+  );
+
+  for (const item of secondItems) {
     let text = String(item.textContent || "")
       .replace(/\s+/g, " ")
       .trim();
 
-    if (!text) {
-      continue;
-    }
+    if (!text) continue;
 
-    const sequence =
-      item.getAttribute("data-sequence");
-
-    const svgPath =
-      item.querySelector("svg path")
-        ?.getAttribute("d") || "";
-
-    // ======================================================
-    // NO OF BUDS
-    // 5+, 7+, 10+
-    // ======================================================
+    // ----------------------------
+    // No of Buds
+    // 5+
+    // ----------------------------
 
     if (/^\d+\s*\+$/.test(text)) {
       attrs.NoOfBuds =
@@ -1177,10 +1194,10 @@ function scrapeAttributes(card) {
       continue;
     }
 
-    // ======================================================
-    // WEIGHT
-    // 55 gr, 75 gr, 1 kg
-    // ======================================================
+    // ----------------------------
+    // Weight
+    // 55 gr
+    // ----------------------------
 
     if (
       /\b(gr|gram|grams|kg)\b/i.test(text)
@@ -1189,108 +1206,53 @@ function scrapeAttributes(card) {
       continue;
     }
 
-    // ======================================================
-    // DIAMETER BY TEXT
-    // Minimaal 9 cm -> 9 cm
-    // Minimum 15 cm -> 15 cm
-    // Min. 10 cm -> 10 cm
-    // ======================================================
+    // ----------------------------
+    // Diameter
+    //
+    // Minimaal 15 cm
+    // -> 15 cm
+    // ----------------------------
 
-    if (
-      /^(minimaal|minimum|min\.)\s*:?\s*/i.test(text)
-    ) {
-      const cleanedDiameter = text
-        .replace(/^minimaal\s*:?\s*/i, "")
-        .replace(/^minimum\s*:?\s*/i, "")
-        .replace(/^min\.?\s*:?\s*/i, "")
+    if (/\b(cm|mm)\b/i.test(text)) {
+      text = text
+        .replace(
+          /^minimaal\s*:?\s*/i,
+          ""
+        )
+        .replace(
+          /^minimum\s*:?\s*/i,
+          ""
+        )
+        .replace(
+          /^min\.?\s*:?\s*/i,
+          ""
+        )
         .trim();
 
-      if (
-        /\b(cm|mm)\b/i.test(cleanedDiameter)
-      ) {
-        attrs.Diameter =
-          cleanedDiameter;
-
-        continue;
-      }
-    }
-
-    // ======================================================
-    // LENGTH ICON
-    // ======================================================
-
-    const isLengthIcon =
-      svgPath.includes("M3.372 11.333") ||
-      svgPath.includes("2.167 5.205");
-
-    if (
-      isLengthIcon &&
-      /\b(cm|mm)\b/i.test(text)
-    ) {
-      attrs.Length = text;
-      continue;
-    }
-
-    // ======================================================
-    // DIAMETER ICON
-    // ======================================================
-
-    const isDiameterIcon =
-      svgPath.includes("M5.906 14.144") ||
-      svgPath.includes("M5.167 8.37") ||
-      svgPath.includes("4.667-4.667");
-
-    if (
-      isDiameterIcon &&
-      /\b(cm|mm)\b/i.test(text)
-    ) {
       attrs.Diameter = text;
+
       continue;
     }
+  }
 
-    // ======================================================
-    // WEIGHT ICON FALLBACK
-    // ======================================================
+  // ======================================================
+  // QUALITY — sequence 3
+  // ======================================================
 
-    const isWeightIcon =
-      svgPath.includes("M4.737 12.5");
+  const qualityItem =
+    card.querySelector(
+      'ul.characteristics li[data-sequence="3"]'
+    );
 
-    if (isWeightIcon) {
-      attrs.Weight = text;
-      continue;
-    }
+  if (qualityItem) {
+    const text = String(
+      qualityItem.textContent || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
 
-    // ======================================================
-    // LENGTH FALLBACK
-    // ======================================================
-
-    if (
-      sequence === "1" &&
-      /\b(cm|mm)\b/i.test(text)
-    ) {
-      attrs.Length = text;
-      continue;
-    }
-
-    // ======================================================
-    // DIAMETER FALLBACK
-    // ======================================================
-
-    if (
-      sequence === "2" &&
-      /\b(cm|mm)\b/i.test(text)
-    ) {
-      attrs.Diameter = text;
-      continue;
-    }
-
-    // ======================================================
-    // QUALITY
-    // ======================================================
-
-    if (sequence === "3") {
+    if (text) {
       attrs.Quality = text;
-      continue;
     }
   }
 
