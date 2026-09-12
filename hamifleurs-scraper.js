@@ -1166,70 +1166,65 @@ function scrapeAttributes(card) {
   );
 
   for (const item of items) {
-    const text = String(item.textContent || "")
+    const rawText = String(item.textContent || "")
       .replace(/\s+/g, " ")
       .trim();
 
-    if (!text) {
+    if (!rawText) {
       continue;
     }
 
     const sequence =
       item.getAttribute("data-sequence");
 
-    const pathD =
-      item.querySelector("svg path")
-        ?.getAttribute("d") || "";
-
-    // ==========================================
+    // ======================================================
     // SEQUENCE 1 = LENGTH
-    // ==========================================
+    // ======================================================
 
     if (sequence === "1") {
-      attrs.Length = text;
+      attrs.Length = rawText;
       continue;
     }
 
-    // ==========================================
-    // SEQUENCE 2 = VARIABLE
-    // ==========================================
+    // ======================================================
+    // SEQUENCE 2
+    // Weight / Diameter / No of Buds
+    // ======================================================
 
     if (sequence === "2") {
+      const lower =
+        rawText.toLowerCase();
 
-      // ----------------------------------------
-      // WEIGHT
+      // ----------------------------------------------------
+      // 1. WEIGHT
       //
       // 55 gr
       // 75 gr
       // 1 kg
-      //
-      // Also detect Hami weight icon.
-      // ----------------------------------------
+      // ----------------------------------------------------
 
-      const isWeight =
-        /\b(gr|gram|grams|kg)\s*$/i.test(text) ||
-        pathD.includes("M4.737 12.5");
-
-      if (isWeight) {
-        attrs.Weight = text;
+      if (
+        /\b(gr|gram|grams|kg)\b/i.test(rawText)
+      ) {
+        attrs.Weight = rawText;
         continue;
       }
 
-      // ----------------------------------------
-      // DIAMETER
+      // ----------------------------------------------------
+      // 2. DIAMETER
       //
       // Minimaal 15 cm
       // 15 cm
-      // ----------------------------------------
+      // 9 cm
+      // ----------------------------------------------------
 
-      const isDiameter =
-        /\b(cm|mm)\s*$/i.test(text) ||
-        /^minimaal/i.test(text) ||
-        /^minimum/i.test(text) ||
-        /^min\./i.test(text);
-
-      if (isDiameter) {
-        attrs.Diameter = text
+      if (
+        /\b(cm|mm)\b/i.test(rawText) ||
+        lower.startsWith("minimaal") ||
+        lower.startsWith("minimum") ||
+        lower.startsWith("min.")
+      ) {
+        attrs.Diameter = rawText
           .replace(
             /^minimaal\s*:?\s*/i,
             ""
@@ -1247,24 +1242,24 @@ function scrapeAttributes(card) {
         continue;
       }
 
-      // ----------------------------------------
-      // NO OF BUDS
+      // ----------------------------------------------------
+      // 3. NO OF BUDS
       //
       // 5+
       // 7+
-      // or other sequence-2 value
-      // ----------------------------------------
+      // or another sequence-2 value
+      // ----------------------------------------------------
 
-      attrs.NoOfBuds = text;
+      attrs.NoOfBuds = rawText;
       continue;
     }
 
-    // ==========================================
+    // ======================================================
     // SEQUENCE 3 = QUALITY
-    // ==========================================
+    // ======================================================
 
     if (sequence === "3") {
-      attrs.Quality = text;
+      attrs.Quality = rawText;
       continue;
     }
   }
