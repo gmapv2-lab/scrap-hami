@@ -1166,7 +1166,9 @@ function scrapeAttributes(card) {
   );
 
   for (const item of items) {
-    const rawText = String(item.textContent || "")
+    const rawText = String(
+      item.textContent || ""
+    )
       .replace(/\s+/g, " ")
       .trim();
 
@@ -1177,8 +1179,13 @@ function scrapeAttributes(card) {
     const sequence =
       item.getAttribute("data-sequence");
 
+    const pathD =
+      item.querySelector("svg path")
+        ?.getAttribute("d") || "";
+
     // ======================================================
     // SEQUENCE 1 = LENGTH
+    // ALWAYS
     // ======================================================
 
     if (sequence === "1") {
@@ -1187,86 +1194,111 @@ function scrapeAttributes(card) {
     }
 
     // ======================================================
-    // SEQUENCE 2
-    // Weight / Diameter / No of Buds
+    // SEQUENCE 2 = WEIGHT / DIAMETER / BUDS
     // ======================================================
 
     if (sequence === "2") {
-      const lower =
-        rawText.toLowerCase();
 
-      // ----------------------------------------------------
+      // ====================================================
       // 1. WEIGHT
       //
-      // 55 gr
-      // 75 gr
-      // 1 kg
-      // ----------------------------------------------------
+      // Your Hami weight icon starts:
+      // M4.737 12.5...
+      // ====================================================
+
+      const isWeightIcon =
+        pathD.includes("M4.737 12.5");
+
+      const isWeightText =
+        /\b(gr|gram|grams|kg)\b/i.test(
+          rawText
+        );
 
       if (
-        /\b(gr|gram|grams|kg)\b/i.test(rawText)
+        isWeightIcon ||
+        isWeightText
       ) {
-        attrs.Weight = rawText;
+        attrs.Weight =
+          rawText;
+
         continue;
       }
 
-      // ----------------------------------------------------
+      // ====================================================
       // 2. DIAMETER
       //
-      // Minimaal 15 cm
-      // 15 cm
-      // 9 cm
-      // ----------------------------------------------------
+      // Your Hami diameter icon contains:
+      // M5.906 14.144
+      // M5.167 8.37
+      // ====================================================
+
+      const isDiameterIcon =
+        pathD.includes("M5.906 14.144") ||
+        pathD.includes("M5.167 8.37") ||
+        pathD.includes("4.667-4.667");
+
+      const isDiameterText =
+        /\b(cm|mm)\b/i.test(
+          rawText
+        ) ||
+        /^minimaal/i.test(
+          rawText
+        ) ||
+        /^minimum/i.test(
+          rawText
+        ) ||
+        /^min\./i.test(
+          rawText
+        );
 
       if (
-        /\b(cm|mm)\b/i.test(rawText) ||
-        lower.startsWith("minimaal") ||
-        lower.startsWith("minimum") ||
-        lower.startsWith("min.")
+        isDiameterIcon ||
+        isDiameterText
       ) {
-        attrs.Diameter = rawText
-          .replace(
-            /^minimaal\s*:?\s*/i,
-            ""
-          )
-          .replace(
-            /^minimum\s*:?\s*/i,
-            ""
-          )
-          .replace(
-            /^min\.?\s*:?\s*/i,
-            ""
-          )
-          .trim();
+        attrs.Diameter =
+          rawText
+            .replace(
+              /^minimaal\s*:?\s*/i,
+              ""
+            )
+            .replace(
+              /^minimum\s*:?\s*/i,
+              ""
+            )
+            .replace(
+              /^min\.?\s*:?\s*/i,
+              ""
+            )
+            .trim();
 
         continue;
       }
 
-      // ----------------------------------------------------
-      // 3. NO OF BUDS
-      //
-      // 5+
-      // 7+
-      // or another sequence-2 value
-      // ----------------------------------------------------
+      // ====================================================
+      // 3. OTHERWISE = NO OF BUDS
+      // ====================================================
 
-      attrs.NoOfBuds = rawText;
+      attrs.NoOfBuds =
+        rawText;
+
       continue;
     }
 
     // ======================================================
     // SEQUENCE 3 = QUALITY
+    // ALWAYS
     // ======================================================
 
     if (sequence === "3") {
-      attrs.Quality = rawText;
+      attrs.Quality =
+        rawText;
+
       continue;
     }
   }
 
   return attrs;
-}
-      // ======================================================
+}  // ======================================================
       // PACKING / PRICE
       // ======================================================
 
