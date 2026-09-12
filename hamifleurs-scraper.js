@@ -1159,10 +1159,6 @@ async function scrapeVisibleProducts(
     NoOfBuds: "N/A",
   };
 
-  if (!card) {
-    return attrs;
-  }
-
   const items = Array.from(
     card.querySelectorAll(
       "ul.characteristics li[data-sequence]"
@@ -1176,58 +1172,37 @@ async function scrapeVisibleProducts(
       .replace(/\s+/g, " ")
       .trim();
 
-    if (!text) {
-      continue;
-    }
+    if (!text) continue;
 
     const sequence =
-      item.getAttribute(
-        "data-sequence"
-      );
+      item.getAttribute("data-sequence");
 
-    // ==========================================
-    // LENGTH
-    // ==========================================
-
-    if (
-      sequence === "1" &&
-      /\b(cm|mm)\b/i.test(text)
-    ) {
+    // Sequence 1 is ALWAYS Length
+    if (sequence === "1") {
       attrs.Length = text;
       continue;
     }
 
-    // ==========================================
-    // NO OF BUDS
-    // ==========================================
+    // Sequence 2 is variable
+    if (sequence === "2") {
 
-    if (/^\d+\s*\+$/.test(text)) {
-      attrs.NoOfBuds =
-        text.replace(/\s+/g, "");
+      // No of Buds
+      if (/^\d+\s*\+$/.test(text)) {
+        attrs.NoOfBuds =
+          text.replace(/\s+/g, "");
+        continue;
+      }
 
-      continue;
-    }
+      // Weight
+      if (
+        /(gr|gram|grams|kg)/i.test(text)
+      ) {
+        attrs.Weight = text;
+        continue;
+      }
 
-    // ==========================================
-    // WEIGHT
-    // ==========================================
-
-    if (
-      /\b(gr|gram|grams|kg)\b/i.test(text)
-    ) {
-      attrs.Weight = text;
-      continue;
-    }
-
-    // ==========================================
-    // DIAMETER
-    // ==========================================
-
-    if (
-      sequence === "2" &&
-      /\b(cm|mm)\b/i.test(text)
-    ) {
-      text = text
+      // Diameter
+      attrs.Diameter = text
         .replace(
           /^minimaal\s*:?\s*/i,
           ""
@@ -1242,14 +1217,10 @@ async function scrapeVisibleProducts(
         )
         .trim();
 
-      attrs.Diameter = text;
       continue;
     }
 
-    // ==========================================
-    // QUALITY
-    // ==========================================
-
+    // Sequence 3 is Quality
     if (sequence === "3") {
       attrs.Quality = text;
       continue;
