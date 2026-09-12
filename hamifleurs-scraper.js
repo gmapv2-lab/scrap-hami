@@ -1150,7 +1150,7 @@ async function scrapeVisibleProducts(
       // each other.
       // ======================================================
 
-   function scrapeAttributes(card) {
+ function scrapeAttributes(card) {
   const attrs = {
     Length: "N/A",
     Diameter: "N/A",
@@ -1166,61 +1166,68 @@ async function scrapeVisibleProducts(
   );
 
   for (const item of items) {
-    let text = String(
-      item.textContent || ""
-    )
+    let text = String(item.textContent || "")
       .replace(/\s+/g, " ")
       .trim();
 
     if (!text) continue;
 
-    const sequence =
-      item.getAttribute("data-sequence");
+    const sequence = item.getAttribute("data-sequence");
 
-    // Sequence 1 is ALWAYS Length
+    // ==========================================
+    // SEQUENCE 1 = LENGTH
+    // ==========================================
     if (sequence === "1") {
       attrs.Length = text;
       continue;
     }
 
-    // Sequence 2 is variable
+    // ==========================================
+    // SEQUENCE 2 = VARIABLE
+    // Weight / Diameter / No of Buds
+    // ==========================================
     if (sequence === "2") {
-
-      // No of Buds
-      if (/^\d+\s*\+$/.test(text)) {
-        attrs.NoOfBuds =
-          text.replace(/\s+/g, "");
-        continue;
-      }
+      const lower = text.toLowerCase();
 
       // Weight
       if (
-        /(gr|gram|grams|kg)/i.test(text)
+        lower.endsWith(" gr") ||
+        lower.endsWith("gr") ||
+        lower.endsWith(" kg") ||
+        lower.endsWith("kg")
       ) {
         attrs.Weight = text;
         continue;
       }
 
       // Diameter
-      attrs.Diameter = text
-        .replace(
-          /^minimaal\s*:?\s*/i,
-          ""
-        )
-        .replace(
-          /^minimum\s*:?\s*/i,
-          ""
-        )
-        .replace(
-          /^min\.?\s*:?\s*/i,
-          ""
-        )
-        .trim();
+      if (
+        lower.endsWith(" cm") ||
+        lower.endsWith("cm") ||
+        lower.endsWith(" mm") ||
+        lower.endsWith("mm") ||
+        lower.includes("minimaal") ||
+        lower.includes("minimum") ||
+        lower.startsWith("min.")
+      ) {
+        attrs.Diameter = text
+          .replace(/^minimaal\s*:?\s*/i, "")
+          .replace(/^minimum\s*:?\s*/i, "")
+          .replace(/^min\.?\s*:?\s*/i, "")
+          .trim();
 
+        continue;
+      }
+
+      // No of Buds
+      // 5+ , 7+ , or any other unknown value
+      attrs.NoOfBuds = text;
       continue;
     }
 
-    // Sequence 3 is Quality
+    // ==========================================
+    // SEQUENCE 3 = QUALITY
+    // ==========================================
     if (sequence === "3") {
       attrs.Quality = text;
       continue;
@@ -1229,7 +1236,6 @@ async function scrapeVisibleProducts(
 
   return attrs;
 }
-
       // ======================================================
       // PACKING / PRICE
       // ======================================================
