@@ -1159,6 +1159,10 @@ async function scrapeVisibleProducts(
     NoOfBuds: "N/A",
   };
 
+  if (!card) {
+    return attrs;
+  }
+
   const items = Array.from(
     card.querySelectorAll(
       "ul.characteristics li[data-sequence]"
@@ -1166,7 +1170,9 @@ async function scrapeVisibleProducts(
   );
 
   for (const item of items) {
-    let text = String(item.textContent || "")
+    let text = String(
+      item.textContent || ""
+    )
       .replace(/\s+/g, " ")
       .trim();
 
@@ -1175,13 +1181,12 @@ async function scrapeVisibleProducts(
     }
 
     const sequence =
-      item.getAttribute("data-sequence");
+      item.getAttribute(
+        "data-sequence"
+      );
 
     // ==========================================
     // LENGTH
-    //
-    // sequence 1
-    // Example: 45 cm
     // ==========================================
 
     if (
@@ -1194,7 +1199,6 @@ async function scrapeVisibleProducts(
 
     // ==========================================
     // NO OF BUDS
-    // Example: 5+
     // ==========================================
 
     if (/^\d+\s*\+$/.test(text)) {
@@ -1206,7 +1210,6 @@ async function scrapeVisibleProducts(
 
     // ==========================================
     // WEIGHT
-    // Example: 55 gr
     // ==========================================
 
     if (
@@ -1218,9 +1221,6 @@ async function scrapeVisibleProducts(
 
     // ==========================================
     // DIAMETER
-    //
-    // Minimaal 15 cm
-    // -> 15 cm
     // ==========================================
 
     if (
@@ -1243,7 +1243,6 @@ async function scrapeVisibleProducts(
         .trim();
 
       attrs.Diameter = text;
-
       continue;
     }
 
