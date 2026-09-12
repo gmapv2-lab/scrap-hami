@@ -1150,7 +1150,7 @@ async function scrapeVisibleProducts(
       // each other.
       // ======================================================
 
- function scrapeAttributes(card) {
+function scrapeAttributes(card) {
   const attrs = {
     Length: "N/A",
     Diameter: "N/A",
@@ -1166,17 +1166,25 @@ async function scrapeVisibleProducts(
   );
 
   for (const item of items) {
-    let text = String(item.textContent || "")
+    const text = String(item.textContent || "")
       .replace(/\s+/g, " ")
       .trim();
 
-    if (!text) continue;
+    if (!text) {
+      continue;
+    }
 
-    const sequence = item.getAttribute("data-sequence");
+    const sequence =
+      item.getAttribute("data-sequence");
+
+    const pathD =
+      item.querySelector("svg path")
+        ?.getAttribute("d") || "";
 
     // ==========================================
     // SEQUENCE 1 = LENGTH
     // ==========================================
+
     if (sequence === "1") {
       attrs.Length = text;
       continue;
@@ -1184,43 +1192,69 @@ async function scrapeVisibleProducts(
 
     // ==========================================
     // SEQUENCE 2 = VARIABLE
-    // Weight / Diameter / No of Buds
     // ==========================================
-    if (sequence === "2") {
-      const lower = text.toLowerCase();
 
-      // Weight
-      if (
-        lower.endsWith(" gr") ||
-        lower.endsWith("gr") ||
-        lower.endsWith(" kg") ||
-        lower.endsWith("kg")
-      ) {
+    if (sequence === "2") {
+
+      // ----------------------------------------
+      // WEIGHT
+      //
+      // 55 gr
+      // 75 gr
+      // 1 kg
+      //
+      // Also detect Hami weight icon.
+      // ----------------------------------------
+
+      const isWeight =
+        /\b(gr|gram|grams|kg)\s*$/i.test(text) ||
+        pathD.includes("M4.737 12.5");
+
+      if (isWeight) {
         attrs.Weight = text;
         continue;
       }
 
-      // Diameter
-      if (
-        lower.endsWith(" cm") ||
-        lower.endsWith("cm") ||
-        lower.endsWith(" mm") ||
-        lower.endsWith("mm") ||
-        lower.includes("minimaal") ||
-        lower.includes("minimum") ||
-        lower.startsWith("min.")
-      ) {
+      // ----------------------------------------
+      // DIAMETER
+      //
+      // Minimaal 15 cm
+      // 15 cm
+      // ----------------------------------------
+
+      const isDiameter =
+        /\b(cm|mm)\s*$/i.test(text) ||
+        /^minimaal/i.test(text) ||
+        /^minimum/i.test(text) ||
+        /^min\./i.test(text);
+
+      if (isDiameter) {
         attrs.Diameter = text
-          .replace(/^minimaal\s*:?\s*/i, "")
-          .replace(/^minimum\s*:?\s*/i, "")
-          .replace(/^min\.?\s*:?\s*/i, "")
+          .replace(
+            /^minimaal\s*:?\s*/i,
+            ""
+          )
+          .replace(
+            /^minimum\s*:?\s*/i,
+            ""
+          )
+          .replace(
+            /^min\.?\s*:?\s*/i,
+            ""
+          )
           .trim();
 
         continue;
       }
 
-      // No of Buds
-      // 5+ , 7+ , or any other unknown value
+      // ----------------------------------------
+      // NO OF BUDS
+      //
+      // 5+
+      // 7+
+      // or other sequence-2 value
+      // ----------------------------------------
+
       attrs.NoOfBuds = text;
       continue;
     }
@@ -1228,6 +1262,7 @@ async function scrapeVisibleProducts(
     // ==========================================
     // SEQUENCE 3 = QUALITY
     // ==========================================
+
     if (sequence === "3") {
       attrs.Quality = text;
       continue;
