@@ -1150,106 +1150,115 @@ async function scrapeVisibleProducts(
       // each other.
       // ======================================================
 
-      function scrapeAttributes(card) {
-        const attrs = {
-          Length: "N/A",
-          Diameter: "N/A",
-          Quality: "N/A",
-          Weight: "N/A",
-          NoOfBuds: "N/A",
-        };
+   function scrapeAttributes(card) {
+  const attrs = {
+    Length: "N/A",
+    Diameter: "N/A",
+    Quality: "N/A",
+    Weight: "N/A",
+    NoOfBuds: "N/A",
+  };
 
-        const charList =
-          card.querySelector(
-            "ul.characteristics"
-          );
+  const items = Array.from(
+    card.querySelectorAll(
+      "ul.characteristics li[data-sequence]"
+    )
+  );
 
-        if (!charList) {
-          return attrs;
-        }
+  for (const item of items) {
+    let text = String(item.textContent || "")
+      .replace(/\s+/g, " ")
+      .trim();
 
-        const items = Array.from(
-          charList.querySelectorAll(
-            ":scope > li"
-          )
-        );
+    if (!text) {
+      continue;
+    }
 
-        for (const item of items) {
-          const sequence =
-            item.getAttribute(
-              "data-sequence"
-            );
+    const sequence =
+      item.getAttribute("data-sequence");
 
-          let text = cleanText(
-            item.textContent
-          );
+    // ==========================================
+    // LENGTH
+    //
+    // sequence 1
+    // Example: 45 cm
+    // ==========================================
 
-          if (!text) continue;
+    if (
+      sequence === "1" &&
+      /\b(cm|mm)\b/i.test(text)
+    ) {
+      attrs.Length = text;
+      continue;
+    }
 
-          // --------------------------------------------
-          // SEQUENCE 1 — always Length
-          // --------------------------------------------
-          if (sequence === "1") {
-            if (/\b(cm|mm)\b/i.test(text)) {
-              attrs.Length = text;
-            }
-            continue;
-          }
+    // ==========================================
+    // NO OF BUDS
+    // Example: 5+
+    // ==========================================
 
-          // --------------------------------------------
-          // SEQUENCE 3 — always Quality
-          // --------------------------------------------
-          if (sequence === "3") {
-            attrs.Quality = text;
-            continue;
-          }
+    if (/^\d+\s*\+$/.test(text)) {
+      attrs.NoOfBuds =
+        text.replace(/\s+/g, "");
 
-          // --------------------------------------------
-          // ANY OTHER SEQUENCE (typically "2") —
-          // Diameter / Weight / No of Buds, by content
-          // --------------------------------------------
+      continue;
+    }
 
-          // No of Buds -> "5+"
-          if (/^\d+\s*\+$/.test(text)) {
-            attrs.NoOfBuds =
-              text.replace(/\s+/g, "");
-            continue;
-          }
+    // ==========================================
+    // WEIGHT
+    // Example: 55 gr
+    // ==========================================
 
-          // Weight -> "55 gr" / "1.2 kg"
-          if (
-            /\b(gr|gram|grams|kg)\b/i.test(
-              text
-            )
-          ) {
-            attrs.Weight = text;
-            continue;
-          }
+    if (
+      /\b(gr|gram|grams|kg)\b/i.test(text)
+    ) {
+      attrs.Weight = text;
+      continue;
+    }
 
-          // Diameter -> "Minimaal 15 cm" / "Minimum 15 cm" / "Min. 15 cm"
-          if (/\b(cm|mm)\b/i.test(text)) {
-            text = text
-              .replace(
-                /^minimaal\s*:?\s*/i,
-                ""
-              )
-              .replace(
-                /^minimum\s*:?\s*/i,
-                ""
-              )
-              .replace(
-                /^min\.?\s*:?\s*/i,
-                ""
-              )
-              .trim();
+    // ==========================================
+    // DIAMETER
+    //
+    // Minimaal 15 cm
+    // -> 15 cm
+    // ==========================================
 
-            attrs.Diameter = text;
-            continue;
-          }
-        }
+    if (
+      sequence === "2" &&
+      /\b(cm|mm)\b/i.test(text)
+    ) {
+      text = text
+        .replace(
+          /^minimaal\s*:?\s*/i,
+          ""
+        )
+        .replace(
+          /^minimum\s*:?\s*/i,
+          ""
+        )
+        .replace(
+          /^min\.?\s*:?\s*/i,
+          ""
+        )
+        .trim();
 
-        return attrs;
-      }
+      attrs.Diameter = text;
+
+      continue;
+    }
+
+    // ==========================================
+    // QUALITY
+    // ==========================================
+
+    if (sequence === "3") {
+      attrs.Quality = text;
+      continue;
+    }
+  }
+
+  return attrs;
+}
 
       // ======================================================
       // PACKING / PRICE
