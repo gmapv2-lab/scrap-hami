@@ -1794,260 +1794,359 @@ function getProductKey(
 // INFINITE SCROLL
 // ============================================================
 
-async function collectAllProductsFromCurrentUrl(
-  page
-) {
-  const products =
-    new Map();
+async function getProductScrollState(page, action = "read") {
+  return page.evaluate((requestedAction) => {
+    const selector = "div.title h4.title-xl-bold";
 
-  let stableBottomRounds =
-    0;
+    const documentRoot =
+      document.scrollingElement || document.documentElement;
 
-  let lastCount =
-    0;
+    const titles = Array.from(
+      document.querySelectorAll(selector)
+    ).filter((title) => {
+      const rect = title.getBoundingClientRect();
+      const style = getComputedStyle(title);
 
-  // ==========================================================
-  // WAIT FOR FIRST PRODUCT
-  // ==========================================================
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.visibility !== "hidden"
+      );
+    });
 
-  const productFound =
-    await page
-      .waitForSelector(
-        "div.title h4.title-xl-bold",
+    const candidates = new Map();
 
-        {
-          visible: true,
-          timeout: 25000,
+    // Find scrollable containers around the product cards.
+    for (const title of titles) {
+      let depth = 0;
+
+      for (
+        let element = title.parentElement;
+        element;
+        element = element.parentElement
+      ) {
+        depth++;
+
+        if (
+          element === documentRoot ||
+          element === document.body
+        ) {
+          continue;
         }
-      )
 
-      .then(
-        () => true
-      )
+        const style = getComputedStyle(element);
 
-      .catch(
-        () => false
+        if (!/^(auto|scroll|overlay)$/.test(style.overflowY)) {
+          continue;
+        }
+
+        if (
+          element.clientHeight <= 0 ||
+          element.getBoundingClientRect().width <= 0
+        ) {
+          continue;
+        }
+
+        const candidate = candidates.get(element) || {
+          element,
+          count: 0,
+          depth: 0,
+        };
+
+        candidate.count++;
+        candidate.depth += depth;
+
+        candidates.set(element, candidate);
+      }
+    }
+
+    // Prefer a container shared by most products.
+    const sharedCandidates = Array.from(candidates.values())
+      .filter(
+        (candidate) =>
+          candidate.count >=
+          Math.max(1, Math.ceil(titles.length * 0.6))
+      )
+      .sort((a, b) => {
+        const aOverflows =
+          a.element.scrollHeight > a.element.clientHeight + 1;
+
+        const bOverflows =
+          b.element.scrollHeight > b.element.clientHeight + 1;
+
+        return (
+          b.count - a.count ||
+          Number(bOverflows) - Number(aOverflows) ||
+          a.depth / a.count - b.depth / b.count
+        );
+      });
+
+    const panel =
+      sharedCandidates.find(
+        (candidate) =>
+          candidate.element.scrollHeight >
+          candidate.element.clientHeight + 1
+      ) ||
+      (
+        documentRoot.scrollHeight <=
+        documentRoot.clientHeight + 1
+          ? sharedCandidates[0]
+          : null
       );
 
-  if (!productFound) {
-    console.log(
-      "⚠️ No products found on this URL."
+    const previous = window.__hamiProductScrollTarget;
+
+    // Keep the known panel during a temporary empty render.
+    const root =
+      panel?.element ||
+      (
+        !titles.length && previous?.element?.isConnected
+          ? previous.element
+          : documentRoot
+      );
+
+    const targetId =
+      previous?.element === root
+        ? previous.id
+        : (previous?.id || 0) + 1;
+
+    window.__hamiProductScrollTarget = {
+      element: root,
+      id: targetId,
+    };
+
+    const beforeTop = root.scrollTop;
+
+    // Use the actual container height for overlapping scroll steps.
+    const step = Math.max(
+      1,
+      Math.floor(root.clientHeight * 0.75)
     );
 
+    if (requestedAction === "top") {
+      root.scrollTo({
+        top: 0,
+        behavior: "instant",
+      });
+    } else if (requestedAction === "down") {
+      root.scrollTo({
+        top: beforeTop + step,
+        behavior: "instant",
+      });
+    }
+
+    const max = Math.max(
+      0,
+      root.scrollHeight - root.clientHeight
+    );
+
+    const label =
+      root === documentRoot
+        ? "document"
+        : root.tagName.toLowerCase() +
+          (root.id ? `#${root.id}` : "") +
+          Array.from(root.classList)
+            .slice(0, 3)
+            .map((name) => `.${name}`)
+            .join("");
+
+    return {
+      target: label,
+      targetId,
+      beforeTop,
+      top: root.scrollTop,
+      max,
+      height: root.scrollHeight,
+      viewport: root.clientHeight,
+      cards: titles.length,
+      atBottom: root.scrollTop >= max - 2,
+    };
+  }, action);
+}
+
+async function collectAllProductsFromCurrentUrl(page) {
+  const products = new Map();
+
+  const BOTTOM_QUIET_MS = 20000;
+
+  let stableBottomRounds = 0;
+  let lastProgressAt = Date.now();
+  let completed = false;
+
+  const productFound = await page
+    .waitForSelector("div.title h4.title-xl-bold", {
+      visible: true,
+      timeout: 25000,
+    })
+    .then(() => true)
+    .catch(() => false);
+
+  if (!productFound) {
+    console.log("⚠️ No products found on this URL.");
     return [];
   }
 
-  // Go top
-  await page.evaluate(
-    () =>
-      window.scrollTo(
-        0,
-        0
-      )
-  );
+  async function captureProducts() {
+    const batch = await scrapeVisibleProducts(page);
 
-  await delay(
-    700
-  );
+    for (const product of batch) {
+      products.set(getProductKey(product), product);
+    }
+  }
+
+  let state = await getProductScrollState(page, "top");
 
   console.log(
-    "🕵️ Starting infinite scroll..."
+    `🧭 Product scroll target: ${state.target} | ` +
+    `viewport=${state.viewport}px | ` +
+    `max=${Math.round(state.max)}px | ` +
+    `cards=${state.cards}`
   );
 
-  // ==========================================================
-  // SCROLL LOOP
-  // ==========================================================
+  await delay(700);
+
+  console.log("🕵️ Starting product-list scroll...");
 
   for (
     let round = 1;
-    round <=
-      MAX_SCROLL_ROUNDS;
+    round <= MAX_SCROLL_ROUNDS;
     round++
   ) {
-    // Give Vue/Nuxt time to finish rendering product characteristics.
+    const countBefore = products.size;
+
     await delay(600);
+    await captureProducts();
 
-    // Capture currently mounted products
-    const visibleProducts =
-      await scrapeVisibleProducts(
-        page
-      );
+    const before = await getProductScrollState(page);
 
-    for (
-      const product of
-        visibleProducts
-    ) {
-      products.set(
-        getProductKey(
-          product
-        ),
+    const movement = await getProductScrollState(
+      page,
+      "down"
+    );
 
-        product
-      );
+    await delay(900);
+    await captureProducts();
+
+    state = await getProductScrollState(page);
+
+    if (state.atBottom) {
+      await delay(1400);
+      await captureProducts();
+
+      // Check again: newly loaded products may extend the list.
+      state = await getProductScrollState(page);
     }
 
-    // Scroll
-    await page.evaluate(
-      () => {
-        const root =
-          document.scrollingElement ||
-          document.documentElement;
+    if (state.targetId !== before.targetId) {
+      state = await getProductScrollState(page, "top");
 
-        const amount =
-          Math.max(
-            Math.floor(
-              window.innerHeight *
-                0.85
-            ),
+      stableBottomRounds = 0;
+      lastProgressAt = Date.now();
 
-            650
-          );
-
-        root.scrollBy(
-          0,
-          amount
-        );
-      }
-    );
-
-    await delay(
-      900
-    );
-
-    // Get current scroll state
-    const state =
-      await page.evaluate(
-        () => {
-          const root =
-            document.scrollingElement ||
-            document.documentElement;
-
-          return {
-            top:
-              root.scrollTop,
-
-            max:
-              Math.max(
-                0,
-
-                root.scrollHeight -
-                  root.clientHeight
-              ),
-          };
-        }
+      console.log(
+        `🔄 Product scroll target changed to ` +
+        `${state.target}; restarting at top.`
       );
 
-    const atBottom =
-      state.top >=
-      state.max - 20;
+      continue;
+    }
 
-    const currentCount =
-      products.size;
+    const added = products.size - countBefore;
+
+    const moved =
+      Math.abs(movement.top - movement.beforeTop) > 1;
+
+    const rangeChanged =
+      state.height !== before.height ||
+      state.viewport !== before.viewport;
 
     if (
-      atBottom &&
-      currentCount ===
-        lastCount
+      added > 0 ||
+      rangeChanged ||
+      moved ||
+      !state.atBottom
     ) {
-      stableBottomRounds++;
+      stableBottomRounds = 0;
+      lastProgressAt = Date.now();
     } else {
-      stableBottomRounds =
-        0;
+      stableBottomRounds++;
     }
+
+    const quietMs = Date.now() - lastProgressAt;
 
     console.log(
       `   ↳ Scroll ${round}: ` +
-      `${currentCount} products | ` +
-      `bottom=${atBottom} | ` +
-      `stable=${stableBottomRounds}/${STABLE_BOTTOM_ROUNDS}`
+      `${products.size} products (+${added}) | ` +
+      `target=${state.target} | ` +
+      `pos=${Math.round(before.top)}→${Math.round(state.top)}` +
+      `/${Math.round(state.max)}px | ` +
+      `cards=${state.cards} | ` +
+      `bottom=${state.atBottom} | ` +
+      `stable=${stableBottomRounds}/${STABLE_BOTTOM_ROUNDS} | ` +
+      `quiet=${Math.floor(quietMs / 1000)}s`
     );
 
-    lastCount =
-      currentCount;
-
-    // ========================================================
-    // EXTRA WAIT AT BOTTOM
-    // ========================================================
-
-    if (atBottom) {
-      await delay(
-        1400
+    if (
+      !moved &&
+      !state.atBottom &&
+      !rangeChanged
+    ) {
+      throw new Error(
+        `Product list did not move: ${state.target}, ` +
+        `position ${Math.round(state.top)}/` +
+        `${Math.round(state.max)}px. ` +
+        "Check the scroll target shown in this log."
       );
-
-      const afterWaitProducts =
-        await scrapeVisibleProducts(
-          page
-        );
-
-      for (
-        const product of
-          afterWaitProducts
-      ) {
-        products.set(
-          getProductKey(
-            product
-          ),
-
-          product
-        );
-      }
-
-      if (
-        products.size >
-        currentCount
-      ) {
-        stableBottomRounds =
-          0;
-
-        lastCount =
-          products.size;
-
-        console.log(
-          `   🌷 New batch loaded → ${products.size}`
-        );
-      }
     }
 
-    // Stop after bottom stays stable
     if (
-      atBottom &&
-      stableBottomRounds >=
-        STABLE_BOTTOM_ROUNDS
+      state.atBottom &&
+      stableBottomRounds >= STABLE_BOTTOM_ROUNDS &&
+      quietMs >= BOTTOM_QUIET_MS
     ) {
+      const finalCount = products.size;
+
+      await captureProducts();
+
+      const finalState = await getProductScrollState(page);
+
+      if (
+        products.size !== finalCount ||
+        !finalState.atBottom ||
+        finalState.height !== state.height ||
+        finalState.targetId !== state.targetId
+      ) {
+        stableBottomRounds = 0;
+        lastProgressAt = Date.now();
+        continue;
+      }
+
+      completed = true;
+
       console.log(
-        "🏁 Bottom stable. No more products."
+        "🏁 Product list stayed at its bottom with " +
+        "no new products for at least 20 seconds."
       );
 
       break;
     }
   }
 
-  // Final capture
-  const finalProducts =
-    await scrapeVisibleProducts(
-      page
-    );
-
-  for (
-    const product of
-      finalProducts
-  ) {
-    products.set(
-      getProductKey(
-        product
-      ),
-
-      product
+  if (!completed) {
+    throw new Error(
+      `Reached ${MAX_SCROLL_ROUNDS} scroll rounds ` +
+      `with ${products.size} products. ` +
+      "The end of the product list was not confirmed; " +
+      "this URL was not written to the sheet."
     );
   }
 
   console.log(
-    `✅ Infinite scroll finished: ${products.size} products`
+    `✅ Scroll scan finished: ${products.size} products ` +
+    "(website total not verified)."
   );
 
-  return Array.from(
-    products.values()
-  );
+  return Array.from(products.values());
 }
 
 // ============================================================
